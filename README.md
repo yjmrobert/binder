@@ -2,7 +2,7 @@
 
 An offline Magic: The Gathering collection tracker that runs entirely in the browser. Point the camera at a card, it reads the name and collector number on the device, and the card goes in your binder. No account, no server, no network after the first load.
 
-Live: https://yjmrobert.github.io/binder/
+Live: https://www.yjmrobert.com/binder/ (the github.io address redirects there)
 
 ## What it does
 
@@ -40,7 +40,7 @@ git clone --depth 1 https://github.com/taw/magic-search-engine tools/magic-searc
 python3 tools/build-index.py tools/magic-search-engine
 ```
 
-Then bump `VERSION` in `sw.js` so installed clients fetch the new files.
+Then bump `VERSION` in `sw.js` (and `APP_VERSION` in `js/app.js`) so installed clients fetch the new files; open clients reload themselves once the new service worker takes over.
 
 ## Recognition notes
 

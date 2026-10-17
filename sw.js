@@ -2,7 +2,7 @@
    cache the OCR engine the first time it is fetched, serve everything
    cache-first afterwards so the app works with no network at all.
    Bump VERSION whenever app.js, app.css or the data files change. */
-const VERSION = "binder-2026-10-17c";
+const VERSION = "binder-2026-10-17d";
 const ART = "binder-art"; // survives app updates; trimmed to ART_MAX entries
 const ART_MAX = 4000;
 const SHELL = [
