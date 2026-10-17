@@ -1,0 +1,59 @@
+# Binder
+
+An offline Magic: The Gathering collection tracker that runs entirely in the browser. Point the camera at a card, it reads the name and collector number on the device, and the card goes in your binder. No account, no server, no network after the first load.
+
+Live: https://yjmrobert.github.io/binder/
+
+## What it does
+
+- **Scan** — live camera viewfinder (or a photo from the gallery). Tesseract.js reads the title band and the collector line; the name is fuzzy-matched against the full index and the printing is pinned from the set code and number. Confident matches go straight in; uncertain ones open a compare sheet or land in a review queue.
+- **Search** — the whole index with a Scryfall-style syntax subset: `t:goblin c:r mv<=2 owned`, `e:fdn -owned`, `o:draw`, `foil`. Colour-identity pip filters, owned-first sort.
+- **Binder** — your collection by colour identity, nine cards a page, with set breakdowns.
+- **Decks** — paste a decklist (Arena, Moxfield or plain lines), see what you own and what's missing, and get substitutes suggested from cards you already have.
+- **Export** — collection as CSV, one row per printing.
+
+Everything is stored in the browser's local storage. Add the page to your home screen for a full-screen install; the service worker caches the index and OCR engine so it keeps working with no signal.
+
+## Layout
+
+```
+index.html              app shell
+css/app.css             theme tokens (dark-first, light under prefers-color-scheme) and components
+js/app.js               the whole app: index loading, search, OCR pipeline, scan, binder, decks
+js/vendor/              tesseract.js 5.1.1 main script
+ocr/                    tesseract.js worker, LSTM core (simd + fallback), English model (fast int)
+data/                   card index: 36k cards, 114k printings, 774 sets
+sw.js                   service worker (precache shell + data, runtime-cache OCR)
+manifest.webmanifest    PWA manifest
+tools/build-index.py    regenerates data/ from a magic-search-engine checkout
+```
+
+No build step. Any static file server works for local development, e.g. `python3 -m http.server` from the repo root. The camera needs a secure context, so on a phone use `localhost` over USB or a tunnel, or just the GitHub Pages deployment.
+
+## Updating the card index
+
+The index is derived from [taw/magic-search-engine](https://github.com/taw/magic-search-engine), which tracks new sets closely.
+
+```
+git clone --depth 1 https://github.com/taw/magic-search-engine tools/magic-search-engine
+python3 tools/build-index.py tools/magic-search-engine
+```
+
+Then bump `VERSION` in `sw.js` so installed clients fetch the new files.
+
+## Recognition notes
+
+`recognize(file)` in `js/app.js` is the whole pipeline:
+
+1. Grayscale the image; OCR the top 30% (page segmentation mode 6) for the name, falling back to a sparse-text pass over the whole image if the match is weak.
+2. Match against all 36k names: trigram candidate pass, then Dice similarity, with a penalty for short names matching inside long lines.
+3. OCR the bottom 14% for the collector number and set code and pick the printing. Name plus number gives full confidence; name alone caps at 84%, which routes to the confirm sheet so the set is the only decision.
+4. `THRESHOLD` (85) decides auto-accept versus confirm.
+
+If the OCR engine can't start (no WebAssembly), the Scan screen says so and falls back to a demo recognizer so the rest of the flows stay usable.
+
+## Licences and attribution
+
+- App code: MIT.
+- [tesseract.js](https://github.com/naptha/tesseract.js) and tesseract.js-core: Apache-2.0. English training data from [tesseract-ocr/tessdata_fast](https://github.com/tesseract-ocr/tessdata_fast), Apache-2.0.
+- Card index derived from [magic-search-engine](https://github.com/taw/magic-search-engine) (MIT). Card names, text and set data are © Wizards of the Coast; this is unofficial fan content permitted under the [Fan Content Policy](https://company.wizards.com/en/legal/fancontentpolicy) and is not endorsed by Wizards.

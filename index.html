@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Binder</title>
+<meta name="description" content="Offline Magic: The Gathering collection tracker. Scan a card with the camera, it goes in the binder.">
+<meta name="theme-color" content="#121417" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f4f5f7" media="(prefers-color-scheme: light)">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Binder">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png" type="image/png">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Figtree:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<div class="app" id="app">
+  <section class="screen on" id="v-loading"><div class="loading"><b>Binder</b><div id="ldmsg">Loading card index…</div><div class="bar"><i id="ldbar" style="width:5%"></i></div></div></section>
+  <section class="screen" id="v-search"></section>
+  <section class="screen" id="v-scan"></section>
+  <section class="screen" id="v-binder"></section>
+  <section class="screen" id="v-decks"></section>
+  <section class="screen" id="v-card"></section>
+  <section class="screen" id="v-deck"></section>
+  <section class="screen" id="v-review"></section>
+  <section class="screen" id="v-more"></section>
+  <nav class="tabbar" id="tabbar" hidden>
+    <button data-tab="search"><i></i>Search</button>
+    <button data-tab="scan"><i></i>Scan<span class="badge" id="rvbadge" hidden></span></button>
+    <button data-tab="binder"><i></i>Binder</button>
+    <button data-tab="decks"><i></i>Decks</button>
+    <button data-tab="more"><i></i>More</button>
+  </nav>
+</div>
+<div class="overlay" id="overlay"><div class="sheet" id="sheet"></div></div>
+<div class="toast" id="toast"></div>
+<script src="js/vendor/tesseract.min.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
