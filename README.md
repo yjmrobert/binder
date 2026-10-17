@@ -12,7 +12,7 @@ Live: https://yjmrobert.github.io/binder/
 - **Decks** — paste a decklist (Arena, Moxfield or plain lines), see what you own and what's missing, and get substitutes suggested from cards you already have.
 - **Export** — collection as CSV, one row per printing.
 
-Everything is stored in the browser's local storage. Add the page to your home screen for a full-screen install; the service worker caches the index and OCR engine so it keeps working with no signal.
+Everything is stored in the browser's local storage. Add the page to your home screen for a full-screen install; the service worker caches the index and OCR engine so it keeps working with no signal. The phone's back button closes sheets and returns from card and deck screens, and tabs and cards are deep-linkable (`#binder`, `#card/Lightning%20Bolt`; `#demo/…` loads the demo collection first).
 
 ## Layout
 
