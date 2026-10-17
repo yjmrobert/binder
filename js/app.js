@@ -12,7 +12,7 @@ function setYear(code){return (SETS[code]||["",""])[1];}
 function buildCard(r){
   const [name,types,sub,sup,mana,ci,o,k,mv,prints,pw,tg]=r;
   const cost=(mana||"").replace(/[{}]/g,"").toUpperCase().replace(/\/(?=[WUBRGC])/g,"");
-  const ps=prints.map(p=>({set:p[0],num:p[1],rarity:p[2]})).reverse();
+  const ps=prints.map(p=>({set:p[0],num:p[1],rarity:p[2],sid:p[3]||""})).reverse();
   const card={id:name,name,types:types||[],sub:sub||[],sup:sup||[],cost,ci:(ci||"").toUpperCase().split("").filter(x=>"WUBRG".includes(x)),o:o||"",kw:(k||[]).map(x=>x.toLowerCase()),mv:mv||0,prints:ps,pt:pw!=null?pw+"/"+tg:""};
   card.type=[...card.sup,...card.types].join(" ")+(card.sub.length?" — "+card.sub.join(" "):"");
   card.lower=name.toLowerCase();
@@ -71,10 +71,21 @@ function esc(s){return String(s).replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",
 function ciClass(card){if(!card.ci.length)return "C";if(card.ci.length>1)return "M";return card.ci[0];}
 function stripe(card,extra=""){const k=ciClass(card);if(k==="M"){const g=card.ci.map((x,i,a)=>`var(--${x}) ${i*100/a.length}% ${(i+1)*100/a.length}%`).join(",");return `<span class="stripe" style="background:linear-gradient(${g});${extra}"></span>`;}return `<span class="stripe ${k}" style="${extra}"></span>`;}
 function pips(cost){if(!cost)return "";let out="";for(const ch of cost){out+=/[WUBRG]/.test(ch)?`<span class="pip ${ch}"></span>`:`<span class="pip">${esc(ch)}</span>`;}return `<span class="pips">${out}</span>`;}
-function thumb(card,size,extra=""){const k=ciClass(card);const st=k==="M"?`class="card ${size} M" style="--ci1:var(--${card.ci[0]});--ci2:var(--${card.ci[card.ci.length-1]})"`:`class="card ${size} ${k}"`;
+/* Card images come from Scryfall's CDN by printing id, lazily, over the typographic card;
+   if the image can't load (offline, not yet cached) the text card stays. */
+function imagesOn(){return !(S&&S.prefs&&S.prefs.images===false);}
+function imgUrl(p,size){if(!p||!p.sid||p.sid.length!==32)return "";const h=p.sid;const d=h.slice(0,8)+"-"+h.slice(8,12)+"-"+h.slice(12,16)+"-"+h.slice(16,20)+"-"+h.slice(20);return `https://cards.scryfall.io/${size}/front/${h[0]}/${h[1]}/${d}.jpg`;}
+/* CDN first; if that URL form ever fails, fall back once to the documented API redirect by set and number. */
+function imgFail(el){const a=el.dataset.alt;if(a&&!el.dataset.tried){el.dataset.tried="1";el.src=a;return;}el.remove();}
+function showPrint(card){const ops=ownedPrints(card.id);if(ops.length){const e=ops[0];return card.prints.find(p=>p.set===e.set&&p.num===e.num)||defaultPrint(card);}return defaultPrint(card);}
+function thumb(card,size,extra="",print){const k=ciClass(card);const st=k==="M"?`class="card ${size} M" style="--ci1:var(--${card.ci[0]});--ci2:var(--${card.ci[card.ci.length-1]})"`:`class="card ${size} ${k}"`;
   const ft=size==="sm"?"":`<div class="ft"><span>${esc(card.pt||card.types[0]||"")}</span>${card.cost?pips(card.cost):""}</div>`;
-  return `<div ${st} aria-hidden="true">${extra}<div class="ttl">${esc(card.name)}</div><div class="art"></div>${ft}</div>`;}
+  const pr0=print||showPrint(card);const url=imagesOn()?imgUrl(pr0,size==="lg"?"normal":"small"):"";
+  const alt=imagesOn()&&pr0?`https://api.scryfall.com/cards/${encodeURIComponent(pr0.set)}/${encodeURIComponent(pr0.num)}?format=image&version=${size==="lg"?"normal":"small"}`:"";
+  const img=url?`<img class="ci" src="${url}" data-alt="${esc(alt)}" alt="" loading="lazy" decoding="async" onerror="imgFail(this)">`:"";
+  return `<div ${st} aria-hidden="true"><div class="ttl">${esc(card.name)}</div><div class="art"></div>${ft}${img}${extra}</div>`;}
 function pr(p){return p.set.toUpperCase()+" "+p.num;}
+function ownedPrints(id){return Object.values(S.col).filter(e=>e.id===id).sort((a,b)=>b.copies.length-a.copies.length);}
 function toast(msg,undo){const t=$("#toast");t.innerHTML=esc(msg)+(undo?'<button id="undo">Undo</button>':"");t.classList.add("on");clearTimeout(t._t);t._t=setTimeout(()=>t.classList.remove("on"),undo?5000:2400);if(undo)$("#undo").onclick=()=>{undo();t.classList.remove("on");};}
 function today(){return new Date().toISOString().slice(0,10);}
 
@@ -174,11 +185,10 @@ function rSearch(){
   const gd=$("#golDemo");if(gd)gd.onclick=()=>{S=seed();save();rSearch();toast("Demo collection loaded");};
   el.querySelectorAll("[data-card]").forEach(b=>b.onclick=()=>{remember(q);go("card",{id:b.dataset.card});});
 }
-function ownedPrints(id){return Object.values(S.col).filter(e=>e.id===id).sort((a,b)=>b.copies.length-a.copies.length);}
 function rowCard(card){
   const own=ownedOf(card.id);const ops=own?ownedPrints(card.id):[];
   const where=own?pr(ops[0])+(ops.length>1?" +"+(ops.length-1)+" more":""):pr(defaultPrint(card))+(card.prints.length>1?" · "+card.prints.length+" printings":"");
-  return `<button class="row ${own?"":"dim"}" data-card="${esc(card.id)}">${stripe(card)}<div class="tx"><div class="n">${esc(card.name)}</div><div class="d">${pips(card.cost)}<span>${esc(card.types.join(" "))} · ${where}</span></div></div><span class="q ${own?"own":""}">${own?"×"+own:"—"}</span></button>`;
+  return `<button class="row ${own?"":"dim"}" data-card="${esc(card.id)}">${stripe(card)}${thumb(card,"sm")}<div class="tx"><div class="n">${esc(card.name)}</div><div class="d">${pips(card.cost)}<span>${esc(card.types.join(" "))} · ${where}</span></div></div><span class="q ${own?"own":""}">${own?"×"+own:"—"}</span></button>`;
 }
 
 /* ========================= CARD ========================= */
@@ -203,7 +213,7 @@ function rCard(){
   </div>
   ${card.o?`<div class="h">Oracle</div><div class="oracle">${esc(card.o)}</div>`:""}
   <div class="h">Printings</div>
-  <div class="lst">${shown.map(p=>{const n=ownedPrint(card.id,p.set,p.num);return `<div class="row ${n?"":"dim"}"><div class="tx"><div class="n mono">${pr(p)} <span class="mu" style="font-weight:400;font-size:11px">${RARITY[p.rarity]||""}</span></div><div class="d">${esc(setName(p.set))} · ${setYear(p.set)}</div></div>
+  <div class="lst">${shown.map(p=>{const n=ownedPrint(card.id,p.set,p.num);return `<div class="row ${n?"":"dim"}">${thumb(card,"sm","",p)}<div class="tx"><div class="n mono">${pr(p)} <span class="mu" style="font-weight:400;font-size:11px">${RARITY[p.rarity]||""}</span></div><div class="d">${esc(setName(p.set))} · ${setYear(p.set)}</div></div>
     <div class="step" role="group" aria-label="${pr(p)} copies"><button data-dec="${p.set}|${esc(p.num)}" ${n?"":"disabled"} aria-label="Remove one">−</button><span class="v" aria-live="polite">${n}</span><button data-inc="${p.set}|${esc(p.num)}" aria-label="Add one">+</button></div></div>`;}).join("")}</div>
   ${card.prints.length>shown.length?`<button class="btn sm ghost" id="allp" style="margin-top:6px">Show all ${card.prints.length} printings</button>`:(showAllPrints&&card.prints.length>8?`<button class="btn sm ghost" id="allp" style="margin-top:6px">Show fewer</button>`:"")}
   ${own?`<div class="h">Copies</div><div class="lst">${Object.values(S.col).filter(e=>e.id===card.id).flatMap(e=>e.copies.map(cp=>({e,cp}))).sort((a,b)=>b.cp.date.localeCompare(a.cp.date)).slice(0,8).map(({e,cp})=>`<div class="row" style="min-height:40px"><div class="tx"><div class="d" style="color:var(--fg)"><span class="mono">${cp.date}</span><span class="mu">·</span>${pr(e)}<span class="mu">·</span>${cp.cond}${cp.foil?'<span class="pill">foil</span>':""}</div></div><span class="mu" style="font-size:12px">${cp.via==="scan"?"scan "+cp.conf+"%":cp.via}</span></div>`).join("")}</div>`:""}
@@ -226,7 +236,7 @@ function openAddSheet(card,prefer){
   const draw=()=>{
     const list=all?card.prints:[...new Set([print,...card.prints.slice(0,8)])];
     $("#sheet").innerHTML=`<div class="grab"></div>
-    <div style="display:flex;gap:12px;align-items:center">${thumb(card,"md")}<div style="flex:1;min-width:0"><div style="font-weight:700;font-size:17px">${esc(card.name)}</div><div class="mu" style="font-size:12px">${esc(card.type)}</div><div class="mu" style="font-size:12px;margin-top:4px">now ×${ownedOf(card.id)} → <b style="color:var(--fg)">×${ownedOf(card.id)+1}</b></div></div></div>
+    <div style="display:flex;gap:12px;align-items:center">${thumb(card,"md","",print)}<div style="flex:1;min-width:0"><div style="font-weight:700;font-size:17px">${esc(card.name)}</div><div class="mu" style="font-size:12px">${esc(card.type)}</div><div class="mu" style="font-size:12px;margin-top:4px">now ×${ownedOf(card.id)} → <b style="color:var(--fg)">×${ownedOf(card.id)+1}</b></div></div></div>
     <div class="h">Printing · ${esc(setName(print.set))} ${setYear(print.set)}</div><div class="chips" style="margin-top:0">${list.map(p=>`<button class="chip ${p===print?"on":""}" data-p="${p.set}|${esc(p.num)}">${pr(p)}</button>`).join("")}${card.prints.length>list.length?`<button class="chip" id="morep">+ ${card.prints.length-list.length} more</button>`:""}</div>
     <div class="h">Condition</div><div class="chips" style="margin-top:0">${["NM","LP","MP","HP"].map(x=>`<button class="chip ${x===cond?"on":""}" data-cond="${x}">${x}</button>`).join("")}<button class="chip ${foil?"on":""}" id="foil">Foil</button></div>
     <div class="btnrow"><button class="btn ghost" id="cancel">Cancel</button><button class="btn pri" id="ok">Add · ${pr(print)}</button></div>`;
@@ -388,7 +398,7 @@ function rScan(){
   ${camBox}
   ${engine}
   <div class="h">Tray</div>
-  ${ses.length?`<div class="tray">${[...ses].reverse().map(s=>{const card=BY_ID[s.id];return `<button data-card="${esc(card.id)}" title="${esc(card.name)}">${thumb(card,"md")}</button>`;}).join("")}</div>
+  ${ses.length?`<div class="tray">${[...ses].reverse().map(s=>{const card=BY_ID[s.id];const p=card.prints.find(x=>x.set===s.set&&x.num===s.num);return `<button data-card="${esc(card.id)}" title="${esc(card.name)}">${thumb(card,"md","",p)}</button>`;}).join("")}</div>
   <div class="lst">${[...ses].reverse().slice(0,8).map(s=>{const card=BY_ID[s.id];return `<button class="row" data-card="${esc(card.id)}">${stripe(card)}<div class="tx"><div class="n">${esc(card.name)}</div><div class="d">${s.set.toUpperCase()} ${esc(s.num)} · ${s.conf}%${s.conf>=THRESHOLD?"":" · confirmed"}</div></div><span class="q own">×${ownedOf(card.id)}</span></button>`;}).join("")}</div>`
   :`<div class="empty">Nothing scanned this session yet. Each card you capture lands here with its printing and confidence.</div>`}
   ${S.review.length?`<button class="btn" id="torev" style="margin-top:12px">Review ${S.review.length} uncertain scan${S.review.length>1?"s":""}</button>`:""}`;
@@ -430,10 +440,10 @@ function openMatchSheet(r,fromReview){
   const draw=()=>{
     const pc=BY_ID[pick.id];
     $("#sheet").innerHTML=`<div class="grab"></div>
-    <div class="compare"><div class="col"><div class="crop">${r.img?`<img src="${r.img}" alt="">`:""}</div>Your scan</div><span class="mu" style="align-self:center">→</span><div class="col">${thumb(pc,"lg")}Best match</div></div>
+    <div class="compare"><div class="col"><div class="crop">${r.img?`<img src="${r.img}" alt="">`:""}</div>Your scan</div><span class="mu" style="align-self:center">→</span><div class="col">${thumb(pc,"lg","",pc.prints.find(p=>p.set===pick.set&&p.num===pick.num))}Best match</div></div>
     <div style="text-align:center;margin-top:10px"><div style="font-weight:700;font-size:18px">${esc(pc.name)}</div><div class="meter" style="justify-content:center;margin-top:6px"><span>${pick.conf}%</span><div class="conf ${pick.conf>=THRESHOLD?"":pick.conf>=40?"wn":"bad"}" style="max-width:120px"><i style="width:${pick.conf}%"></i></div><span class="mono">${pick.set.toUpperCase()} ${esc(pick.num)}</span></div>${r.how?`<div class="mu" style="font-size:11px;margin-top:4px">printing from ${esc(r.how)}</div>`:""}</div>
     <div class="h">Candidates</div>
-    <div class="lst">${list().map((a,i)=>{const ac=BY_ID[a.id];if(!ac)return "";const on=a.id===pick.id&&a.set===pick.set&&a.num===pick.num;return `<button class="row ${on?"":"dim"}" data-alt="${i}" style="min-height:44px">${stripe(ac)}<div class="tx"><div class="n">${esc(ac.name)}</div><div class="d">${a.set.toUpperCase()} ${esc(a.num)} · ${esc(setName(a.set))}</div></div><span class="q ${on?"own":""}">${a.conf}%</span></button>`;}).join("")}</div>
+    <div class="lst">${list().map((a,i)=>{const ac=BY_ID[a.id];if(!ac)return "";const on=a.id===pick.id&&a.set===pick.set&&a.num===pick.num;return `<button class="row ${on?"":"dim"}" data-alt="${i}" style="min-height:52px">${stripe(ac)}${thumb(ac,"sm","",ac.prints.find(p=>p.set===a.set&&p.num===a.num))}<div class="tx"><div class="n">${esc(ac.name)}</div><div class="d">${a.set.toUpperCase()} ${esc(a.num)} · ${esc(setName(a.set))}</div></div><span class="q ${on?"own":""}">${a.conf}%</span></button>`;}).join("")}</div>
     <div class="btnrow"><button class="btn ghost" id="typeit">Type the name</button><button class="btn pri" id="accept">Accept ${pick.set.toUpperCase()} ${esc(pick.num)}</button></div>
     ${fromReview?"":'<button class="btn sm ghost" id="later" style="width:100%;margin-top:8px">Decide later</button>'}`;
     $("#sheet").querySelectorAll("[data-alt]").forEach(b=>b.onclick=()=>{pick=list()[+b.dataset.alt];draw();});
@@ -448,7 +458,7 @@ function openAddSheetScan(card,r,fromReview){
   const draw=()=>{
     const list=all?card.prints:[...new Set([print,...card.prints.slice(0,8)])];
     $("#sheet").innerHTML=`<div class="grab"></div>
-    <div style="display:flex;gap:12px;align-items:center">${r&&r.img?`<div class="crop" style="width:60px;height:84px"><img src="${r.img}" alt=""></div>`:thumb(card,"md")}<div style="flex:1;min-width:0"><div style="font-weight:700;font-size:17px">${esc(card.name)}</div><div class="mu" style="font-size:12px">${esc(card.type)}</div></div></div>
+    <div style="display:flex;gap:12px;align-items:center">${r&&r.img?`<div class="crop" style="width:60px;height:84px"><img src="${r.img}" alt=""></div>`:""}${thumb(card,"md","",print)}<div style="flex:1;min-width:0"><div style="font-weight:700;font-size:17px">${esc(card.name)}</div><div class="mu" style="font-size:12px">${esc(card.type)}</div></div></div>
     <div class="h">Printing · ${esc(setName(print.set))} ${setYear(print.set)}</div><div class="chips" style="margin-top:0">${list.map(p=>`<button class="chip ${p===print?"on":""}" data-p="${p.set}|${esc(p.num)}">${pr(p)}</button>`).join("")}${card.prints.length>list.length?`<button class="chip" id="morep">+ ${card.prints.length-list.length} more</button>`:""}</div>
     <div class="btnrow"><button class="btn ghost" id="cancel">Cancel</button><button class="btn pri" id="ok">Save · ${pr(print)}</button></div>`;
     $("#sheet").querySelectorAll("[data-p]").forEach(b=>b.onclick=()=>{const [s,n]=b.dataset.p.split("|");print=card.prints.find(p=>p.set===s&&p.num===n)||print;draw();});
@@ -466,7 +476,7 @@ function openTypeSheet(onPick){
     const show=hits.slice(0,8);
     $("#sheet").innerHTML=`<div class="grab"></div>
     <div class="in"><span class="mu">⌕</span><input id="tin" placeholder="Start typing the card name" value="${esc(t)}" autocomplete="off" autocapitalize="off" spellcheck="false"></div>
-    <div class="lst" style="margin-top:6px">${show.map(h=>{const i=h.lower.indexOf(tl);const nm=esc(h.name.slice(0,i))+"<mark style='background:var(--acs);color:inherit;border-radius:2px'>"+esc(h.name.slice(i,i+t.length))+"</mark>"+esc(h.name.slice(i+t.length));const own=ownedOf(h.id);return `<button class="row" data-name="${esc(h.name)}" style="min-height:46px">${stripe(h)}<div class="tx"><div class="n">${nm}</div><div class="d">${esc(h.type)}${own?" · owned ×"+own:""}</div></div><span class="mu">›</span></button>`;}).join("")}
+    <div class="lst" style="margin-top:6px">${show.map(h=>{const i=h.lower.indexOf(tl);const nm=esc(h.name.slice(0,i))+"<mark style='background:var(--acs);color:inherit;border-radius:2px'>"+esc(h.name.slice(i,i+t.length))+"</mark>"+esc(h.name.slice(i+t.length));const own=ownedOf(h.id);return `<button class="row" data-name="${esc(h.name)}" style="min-height:52px">${stripe(h)}${thumb(h,"sm")}<div class="tx"><div class="n">${nm}</div><div class="d">${esc(h.type)}${own?" · owned ×"+own:""}</div></div><span class="mu">›</span></button>`;}).join("")}
     ${tl.length>=3&&!hits.length?'<div class="empty">Not in the index.</div>':""}</div>`;
     const inp=$("#tin");inp.focus();inp.setSelectionRange(t.length,t.length);
     inp.oninput=()=>{t=inp.value;draw();};
@@ -568,7 +578,7 @@ function openSuggestSheet(line,deck){
   $("#sheet").innerHTML=`<div class="grab"></div>
   <div class="mu" style="font-size:12px">Missing</div><div style="font-weight:700;font-size:18px">${esc(card.name)}</div><div class="mu" style="font-size:12px;display:flex;align-items:center;gap:6px;margin-top:2px;flex-wrap:wrap">${pips(card.cost)} ${esc(card.type)}${card.kw.length?" · "+card.kw.join(", "):""}</div>
   <div class="h">From your collection</div>
-  <div class="lst">${sugg.length?sugg.map(o=>`<button class="row" data-swap="${esc(o.x.id)}" style="min-height:48px">${stripe(o.x)}<div class="tx"><div class="n">${esc(o.x.name)}</div><div class="d">${esc(o.why.join(" · "))}</div></div><span class="q own">×${ownedOf(o.x.id)}</span></button>`).join(""):'<div class="empty">Nothing you own shares its role and colours.</div>'}</div>
+  <div class="lst">${sugg.length?sugg.map(o=>`<button class="row" data-swap="${esc(o.x.id)}" style="min-height:52px">${stripe(o.x)}${thumb(o.x,"sm")}<div class="tx"><div class="n">${esc(o.x.name)}</div><div class="d">${esc(o.why.join(" · "))}</div></div><span class="q own">×${ownedOf(o.x.id)}</span></button>`).join(""):'<div class="empty">Nothing you own shares its role and colours.</div>'}</div>
   <div class="note">Matched on type, subtypes and keywords only, offline. No price or metagame data involved.</div>
   <div class="btnrow"><button class="btn ghost" id="keep">Keep missing</button><button class="btn pri" id="addit">Add ${esc(card.name)}</button></div>`;
   $("#sheet").querySelectorAll("[data-swap]").forEach(b=>b.onclick=()=>{const sub=BY_ID[b.dataset.swap];line.name=sub.name;line.cardId=sub.id;save();closeSheet();render();toast(`Swapped in ${sub.name}`);});
@@ -585,15 +595,18 @@ function rMore(){
   <div class="sect"><div style="display:flex;justify-content:space-between"><span>Collection</span><span class="mono">${totalOwned()} cards</span></div><div style="display:flex;justify-content:space-between;margin-top:6px"><span>Printings</span><span class="mono">${Object.keys(S.col).length}</span></div><div style="display:flex;justify-content:space-between;margin-top:6px"><span>Index</span><span class="mono">${INDEX.length.toLocaleString()} cards · ${Object.keys(SETS).length} sets</span></div><div style="display:flex;justify-content:space-between;margin-top:6px"><span>Index built</span><span class="mono">2026-10-17</span></div><div style="display:flex;justify-content:space-between;margin-top:6px"><span>OCR engine</span><span class="mono" id="ocrstate">${ocrState==="ready"?"ready":ocrState==="failed"?"unavailable":ocrState==="loading"?"starting…":"starts on first scan"}</span></div><div style="display:flex;justify-content:space-between;margin-top:6px"><span>Auto-accept threshold</span><span class="mono">${THRESHOLD}%</span></div></div>
   ${ocrState==="idle"?'<button class="btn" id="warm" style="margin-top:10px">Start OCR engine now</button>':""}
   ${ocrState==="failed"?`<div class="sect warn" style="margin-top:10px;font-size:12.5px">${esc(ocrErr)}</div>`:""}
+  <div class="h">Card images</div>
+  <div class="sect"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px"><div><div>Show card art</div><div class="note" style="margin-top:2px">Loaded from Scryfall as you browse; cards you've viewed stay cached for offline use.</div></div><button class="chip ${imagesOn()?"on":""}" id="imgtoggle" role="switch" aria-checked="${imagesOn()}">${imagesOn()?"On":"Off"}</button></div></div>
   <div class="h">Export</div>
   <button class="btn" id="csv">Copy collection as CSV</button>
   <div class="note">One row per printing: name, set, collector number, quantity, foil count, conditions. Paste into a sheet or Moxfield.</div>
   <div class="h">Data</div>
-  <div class="note" style="margin-top:0">The collection lives in this browser's local storage. The card index (magic-search-engine build of 2026-10-17, every printing through the latest sets) and the OCR engine (Tesseract.js 5, English LSTM model) are cached by the service worker after first use, so the whole app works offline. Add it to your home screen for a full-screen install.</div>
+  <div class="note" style="margin-top:0">The collection lives in this browser's local storage. The card index (magic-search-engine build of 2026-10-17, every printing through the latest sets) and the OCR engine (Tesseract.js 5, English LSTM model) are cached by the service worker after first use, so the whole app works offline; card art is the one thing fetched on demand. Add it to your home screen for a full-screen install.</div>
   <div class="btnrow" style="margin-top:10px"><button class="btn" id="demo">Load demo collection</button><button class="btn" id="reset">Clear everything</button></div>`;
   $("#csv").onclick=()=>{const rows=[["name","set","number","qty","foil","conditions"]];for(const e of Object.values(S.col)){rows.push([BY_ID[e.id].name,e.set.toUpperCase(),e.num,e.copies.length,e.copies.filter(c=>c.foil).length,e.copies.map(c=>c.cond).join(" ")]);}copyText(rows.map(r=>r.map(v=>/[",\n]/.test(String(v))?'"'+String(v).replace(/"/g,'""')+'"':v).join(",")).join("\n"),"CSV copied");};
   $("#demo").onclick=()=>{S=seed();save();lastImg=null;go("search");toast("Demo collection loaded");};
   $("#reset").onclick=()=>{if(!confirmReset){confirmReset=true;$("#reset").textContent="Tap again to clear";setTimeout(()=>{confirmReset=false;const b=$("#reset");if(b)b.textContent="Clear everything";},4000);return;}confirmReset=false;S=empty();save();lastImg=null;go("search");toast("Collection cleared");};
+  $("#imgtoggle").onclick=()=>{S.prefs=S.prefs||{};S.prefs.images=!imagesOn();save();rMore();};
   const wm=$("#warm");if(wm)wm.onclick=async()=>{wm.disabled=true;wm.textContent="Starting…";await getOCR();rMore();toast(ocrState==="ready"?"OCR ready":"OCR couldn't start");};
 }
 function copyText(txt,msg){

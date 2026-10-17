@@ -2,7 +2,9 @@
    cache the OCR engine the first time it is fetched, serve everything
    cache-first afterwards so the app works with no network at all.
    Bump VERSION whenever app.js, app.css or the data files change. */
-const VERSION = "binder-2026-10-17b";
+const VERSION = "binder-2026-10-17c";
+const ART = "binder-art"; // survives app updates; trimmed to ART_MAX entries
+const ART_MAX = 4000;
 const SHELL = [
   "./",
   "./index.html",
@@ -24,7 +26,7 @@ self.addEventListener("install", (e) => {
 
 self.addEventListener("activate", (e) => {
   e.waitUntil(
-    caches.keys().then((keys) => Promise.all(keys.filter((k) => k !== VERSION).map((k) => caches.delete(k)))).then(() => self.clients.claim())
+    caches.keys().then((keys) => Promise.all(keys.filter((k) => k !== VERSION && k !== ART).map((k) => caches.delete(k)))).then(() => self.clients.claim())
   );
 });
 
@@ -34,6 +36,16 @@ self.addEventListener("fetch", (e) => {
   const url = new URL(req.url);
   const sameOrigin = url.origin === self.location.origin;
   const fontHost = url.hostname === "fonts.googleapis.com" || url.hostname === "fonts.gstatic.com";
+  const artHost = url.hostname === "cards.scryfall.io";
+  if (artHost) {
+    e.respondWith(
+      caches.open(ART).then((c) => c.match(req).then((hit) => hit || fetch(req).then((res) => {
+        if (res.ok || res.type === "opaque") { c.put(req, res.clone()); trimArt(c); }
+        return res;
+      })))
+    );
+    return;
+  }
   if (!sameOrigin && !fontHost) return;
 
   if (req.mode === "navigate") {
@@ -53,3 +65,13 @@ self.addEventListener("fetch", (e) => {
     })
   );
 });
+
+let trimming = false;
+async function trimArt(c) {
+  if (trimming) return;
+  trimming = true;
+  try {
+    const keys = await c.keys();
+    if (keys.length > ART_MAX) await Promise.all(keys.slice(0, keys.length - ART_MAX + 200).map((k) => c.delete(k)));
+  } finally { trimming = false; }
+}
