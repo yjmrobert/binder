@@ -1313,7 +1313,7 @@ function copyText(txt,msg){
    browser OAuth flow with no SDK: a popup (or tab, in an installed app) to Google, back to oauth.html,
    which stores the token and tells this page. Tokens last an hour; background syncs that find one
    expired simply wait for the next user-initiated action. */
-const GDRIVE_CLIENT_ID="";
+const GDRIVE_CLIENT_ID="202525328453-lgbfe18bsoafi3mcata3sf0pj7bhevg9.apps.googleusercontent.com";
 const GDRIVE_SCOPE="https://www.googleapis.com/auth/drive.file";
 const DRIVE=Object.assign({api:"https://www.googleapis.com/drive/v3",upload:"https://www.googleapis.com/upload/drive/v3",auth:"https://accounts.google.com/o/oauth2/v2/auth"},(typeof window!=="undefined"&&window.BINDER_DRIVE)||{});
 const SYNC_FILE="collection.json",SYNC_FOLDER="Binder",TOKEN_KEY="binder-gdrive-token";
@@ -1462,7 +1462,7 @@ function syncStatusLine(){const g=S.prefs.gdrive||{};if(sync.busy)return "Syncin
 })();
 /* After a deploy the old cached app runs once while the new service worker installs.
    When the new one takes over, reload once so the new build is what you see. */
-const APP_VERSION="20261018l";
+const APP_VERSION="20261018m";
 let swReg=null;
 function setupUpdates(){
   if(!("serviceWorker" in navigator))return;
