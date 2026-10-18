@@ -582,7 +582,7 @@ function closeCamera(){stopLive();cancelScan();if(stream){stream.getTracks().for
    card last added, the full-resolution guide crop goes to recognition. The result becomes a
    banner and a tray entry, never a sheet; uncertain matches go to the review queue. The next add
    is armed only once the region has changed substantially (card lifted, next one in). */
-let live={on:true,timer:null,prevGray:null,still:0,lastHash:null,lastGray:null,armed:true,busy:false,cooldownUntil:0,fails:0,sound:true,sharpHist:[],state:"",hashes:[],presentSince:0,diag:""};
+let live={on:true,timer:null,prevGray:null,still:0,lastHash:null,lastGray:null,armed:true,busy:false,cooldownUntil:0,fails:0,sound:true,sharpHist:[],state:"",hashes:[],presentSince:0,absent:0,sawAbsent:true,lastAdd:null,diag:""};
 /* The guide frame shows what the scanner is doing: seek (dashed), hold (solid white: a card is
    there, waiting for it to settle), read (amber pulse), ok / review (green / amber, with a
    full-screen flash so it registers without looking at the screen). */
@@ -604,7 +604,7 @@ function sampleGuide(v,g,w,h,keepColour){
 function dhash(cv){const t=document.createElement("canvas");t.width=9;t.height=8;t.getContext("2d").drawImage(cv,0,0,9,8);const d=t.getContext("2d").getImageData(0,0,9,8).data;const bits=[];for(let y=0;y<8;y++)for(let x=0;x<8;x++){const i=(y*9+x)*4,j=(y*9+x+1)*4;const a=d[i]*.3+d[i+1]*.59+d[i+2]*.11,b=d[j]*.3+d[j+1]*.59+d[j+2]*.11;bits.push(a>b?1:0);}return bits;}
 function hamming(a,b){if(!a||!b)return 64;let n=0;for(let i=0;i<64;i++)if(a[i]!==b[i])n++;return n;}
 function grayOf(cv){const d=cv.getContext("2d").getImageData(0,0,cv.width,cv.height).data;const g=new Float32Array(d.length/4);for(let i=0,j=0;i<d.length;i+=4,j++)g[j]=d[i]*.3+d[i+1]*.59+d[i+2]*.11;return g;}
-function startLive(){stopLive();live.prevGray=null;live.still=0;live.armed=true;live.lastHash=null;live.lastGray=null;live.fails=0;live.sharpHist=[];live.hashes=[];live.presentSince=0;live.state="";setGuideState("seek");live.timer=setInterval(liveTick,120);}
+function startLive(){stopLive();live.prevGray=null;live.still=0;live.armed=true;live.lastHash=null;live.lastGray=null;live.fails=0;live.sharpHist=[];live.hashes=[];live.presentSince=0;live.absent=0;live.sawAbsent=true;live.lastAdd=null;live.state="";setGuideState("seek");live.timer=setInterval(liveTick,120);}
 function stopLive(){if(live.timer){clearInterval(live.timer);live.timer=null;}}
 async function liveTick(){
   if(!liveOn())return;
@@ -631,8 +631,8 @@ async function liveTick(){
   live.sharpHist.push(q.sharp);if(live.sharpHist.length>25)live.sharpHist.shift();
   const peak=Math.max(...live.sharpHist);const need=Math.min(35,Math.max(12,peak*.5));
   const now=Date.now();const cg=cardGate(mid);
-  if(q.sharp<8||!cg.ok){live.presentSince=0;setGuideState("seek");setLiveHint((q.sharp<8?"Looking for a card…":"Line the card up in the frame")+diag(motion,q,cg));return;}
-  if(!live.presentSince)live.presentSince=now;
+  if(q.sharp<8||!cg.ok){if(++live.absent>=2)live.sawAbsent=true;if(live.absent>=4)live.presentSince=0;setGuideState("seek");setLiveHint((q.sharp<8?"Looking for a card…":"Line the card up in the frame")+diag(motion,q,cg));return;}
+  live.absent=0;if(!live.presentSince)live.presentSince=now;
   // Fallback: a card has been lined up for over 1.5 s but the gates never agreed; try anyway.
   const overdue=now-live.presentSince>1500;
   if(!overdue){
@@ -651,8 +651,17 @@ async function liveTick(){
     const s=r&&r.signals||{};
     const solid=r&&r.guess&&((s.name||0)>=.85||((s.name||0)>=.6&&((s.type||0)>=.5||(s.print||0)>=.85)));
     if(r&&r.guess&&!solid)r.guess=null;
+    // Same card and printing as the last add, with no empty frame in between: the card never left,
+    // whatever the shimmer and wobble did to the pixels. Don't add it again; say what would.
+    const la=live.lastAdd;
+    if(r&&r.guess&&la&&!live.sawAbsent&&la.id===r.guess&&la.set===r.print.set&&la.num===r.print.num){
+      live.lastHash=hash;live.lastGray=gray;live.armed=false;live.cooldownUntil=Date.now()+800;
+      setGuideState("seek");setLiveHint("Same card as before. Lift it away before scanning another copy, or tap Capture.");
+      live.busy=false;return;
+    }
     if(r&&r.guess){
       live.lastHash=hash;live.lastGray=gray;live.armed=false;live.fails=0;
+      live.lastAdd={id:r.guess,set:r.print.set,num:r.print.num,at:Date.now()};live.sawAbsent=false;
       const img=await thumbData(full);
       if(r.conf>=THRESHOLD){commitScan(r,{quiet:true});liveBanner(r,"ok");flash("ok");setGuideState("ok");feedback();}
       else{S.review.push({id:"r"+Date.now(),guess:r.guess,print:r.print,conf:r.conf,alts:r.alts||[],img,at:today(),signals:r.signals});save();liveBanner(r,"review");flash("review");setGuideState("review");feedback(true);}
@@ -677,7 +686,7 @@ function cardGate(cv){
   const sorted=Array.from(rows.subarray(1,h-1)).sort((a,b)=>a-b);const med=sorted[sorted.length>>1]||0;
   let top=0;for(let y=1;y<Math.round(h*.16);y++)top=Math.max(top,rows[y]);
   let mid=0;for(let y=Math.round(h*.5);y<Math.round(h*.68);y++)mid=Math.max(mid,rows[y]);
-  const ok=top>=20&&top>=3*med;
+  const ok=top>=20&&(top>=3*med||top>=45);
   return {ok,top:Math.round(top),mid:Math.round(mid),med:+med.toFixed(1)};
 }
 function diag(motion,q,cg){if(!(S.prefs&&S.prefs.diag))return "";return ` · m ${motion.toFixed(1)} s ${Math.round(q.sharp)} still ${live.still}${cg?` edge ${cg.top}/${cg.med}`:""}`;}
@@ -1250,7 +1259,7 @@ function copyText(txt,msg){
 })();
 /* After a deploy the old cached app runs once while the new service worker installs.
    When the new one takes over, reload once so the new build is what you see. */
-const APP_VERSION="20261018i";
+const APP_VERSION="20261018j";
 let swReg=null;
 function setupUpdates(){
   if(!("serviceWorker" in navigator))return;
