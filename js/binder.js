@@ -1378,7 +1378,7 @@ function signIn(prompt){
 /* --- transport --- */
 async function driveFetch(url,opts){const t=readToken();if(!t){sync.needAuth=true;throw new Error("signed out");}
   const o=Object.assign({},opts||{});o.headers=Object.assign({Authorization:"Bearer "+t},o.headers||{});
-  const r=await fetch(url,o);if(r.status===401){clearToken();sync.needAuth=true;throw new Error("signed out");}if(!r.ok)throw new Error("Drive error "+r.status);return r;}
+  const r=await fetch(url,o);if(r.status===401){clearToken();sync.needAuth=true;throw new Error("signed out");}if(!r.ok){let why="";try{const j=await r.json();const e=j&&j.error;why=(e&&(e.status||(e.errors&&e.errors[0]&&e.errors[0].reason)))||"";if(e&&e.message&&/not been used|disabled|enable/i.test(e.message))why="Drive API not enabled on the project";}catch(e){}throw new Error("Drive error "+r.status+(why?" ("+why+")":""));}return r;}
 async function driveFind(){const q=encodeURIComponent("appProperties has { key='binder' and value='collection' } and trashed=false");
   const r=await driveFetch(`${DRIVE.api}/files?q=${q}&fields=files(id,headRevisionId,modifiedTime,webViewLink,size)&spaces=drive&pageSize=5`);const j=await r.json();return (j.files&&j.files[0])||null;}
 async function driveFolder(){const q=encodeURIComponent("appProperties has { key='binder' and value='folder' } and trashed=false and mimeType='application/vnd.google-apps.folder'");
@@ -1462,7 +1462,7 @@ function syncStatusLine(){const g=S.prefs.gdrive||{};if(sync.busy)return "Syncin
 })();
 /* After a deploy the old cached app runs once while the new service worker installs.
    When the new one takes over, reload once so the new build is what you see. */
-const APP_VERSION="20261018m";
+const APP_VERSION="20261018n";
 let swReg=null;
 function setupUpdates(){
   if(!("serviceWorker" in navigator))return;

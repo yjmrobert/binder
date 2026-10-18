@@ -6,7 +6,7 @@
      survives app updates, trimmed at ART_MAX).
    - Serves everything cache-first afterwards; navigations are network-first.
    Bump VERSION whenever an app file changes; bump DATA_VERSION only when data/ changes. */
-const VERSION = "binder-20261018m";
+const VERSION = "binder-20261018n";
 const DATA_VERSION = "data-20261018";
 const ART = "binder-art";
 const ART_MAX = 4000;
@@ -14,8 +14,8 @@ const ART_MAX = 4000;
 const APP_FILES = [
   "./",
   "./index.html",
-  "./css/binder.css?v=20261018m",
-  "./js/binder.js?v=20261018m",
+  "./css/binder.css?v=20261018n",
+  "./js/binder.js?v=20261018n",
   "./js/vendor/tesseract.min.js?v=5.1.1",
   "./manifest.webmanifest",
   "./oauth.html",
