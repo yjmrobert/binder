@@ -59,7 +59,7 @@ function seed(){
 function pk(id,set,num){return id+"|"+set+"|"+num;}
 function cid(){return Date.now().toString(36)+Math.random().toString(36).slice(2,9);}
 function fnv(s){let h=2166136261;for(let i=0;i<s.length;i++){h^=s.charCodeAt(i);h=Math.imul(h,16777619)>>>0;}return h.toString(36);}
-function addCopy(col,id,set,num,copy){const k=pk(id,set,num);if(!copy.id)copy.id=cid();if(typeof S!=="undefined"&&S&&col===S.col&&S.tomb)delete S.tomb[copy.id];(col[k]=col[k]||{id,set,num,copies:[]}).copies.push(copy);if(typeof SETSTATS!=="undefined")SETSTATS=null;if(typeof S!=="undefined"&&S&&col===S.col){const c=BY_ID[id];const p=c&&c.prints.find(x=>x.set===set&&x.num===num);if(p&&typeof wantPrices==="function")setTimeout(()=>wantPrices([p]),0);}}
+function addCopy(col,id,set,num,copy){const k=pk(id,set,num);if(!copy.id||(typeof S!=="undefined"&&S&&col===S.col&&S.tomb&&S.tomb[copy.id]))copy.id=cid();(col[k]=col[k]||{id,set,num,copies:[]}).copies.push(copy);if(typeof SETSTATS!=="undefined")SETSTATS=null;if(typeof S!=="undefined"&&S&&col===S.col){const c=BY_ID[id];const p=c&&c.prints.find(x=>x.set===set&&x.num===num);if(p&&typeof wantPrices==="function")setTimeout(()=>wantPrices([p]),0);}}
 function empty(){return {col:{},review:[],decks:[],session:[],prefs:{},tomb:{},deckTomb:{},prefsAt:0};}
 /* Every copy carries a stable id and removals leave a tombstone, so two devices can be merged as a
    set: union of copies minus tombstones, which is commutative and idempotent. Copies that predate ids
@@ -1380,7 +1380,7 @@ async function driveFetch(url,opts){const t=readToken();if(!t){sync.needAuth=tru
   const o=Object.assign({},opts||{});o.headers=Object.assign({Authorization:"Bearer "+t},o.headers||{});
   const r=await fetch(url,o);if(r.status===401){clearToken();sync.needAuth=true;throw new Error("signed out");}if(!r.ok){let why="";try{const j=await r.json();const e=j&&j.error;why=(e&&(e.status||(e.errors&&e.errors[0]&&e.errors[0].reason)))||"";if(e&&e.message&&/not been used|disabled|enable/i.test(e.message))why="Drive API not enabled on the project";}catch(e){}throw new Error("Drive error "+r.status+(why?" ("+why+")":""));}return r;}
 async function driveFind(){const q=encodeURIComponent("appProperties has { key='binder' and value='collection' } and trashed=false");
-  const r=await driveFetch(`${DRIVE.api}/files?q=${q}&fields=files(id,headRevisionId,modifiedTime,webViewLink,size)&spaces=drive&pageSize=5`);const j=await r.json();return (j.files&&j.files[0])||null;}
+  const r=await driveFetch(`${DRIVE.api}/files?q=${q}&fields=files(id,headRevisionId,modifiedTime,createdTime,webViewLink,size,trashed)&spaces=drive&pageSize=10&orderBy=createdTime`);const j=await r.json();return (j.files&&j.files[0])||null;}
 async function driveFolder(){const q=encodeURIComponent("appProperties has { key='binder' and value='folder' } and trashed=false and mimeType='application/vnd.google-apps.folder'");
   const r=await driveFetch(`${DRIVE.api}/files?q=${q}&fields=files(id)&pageSize=1`);const j=await r.json();if(j.files&&j.files[0])return j.files[0].id;
   const c=await driveFetch(`${DRIVE.api}/files?fields=id`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name:SYNC_FOLDER,mimeType:"application/vnd.google-apps.folder",appProperties:{binder:"folder"}})});return (await c.json()).id;}
@@ -1400,6 +1400,7 @@ async function syncNow(reason){
     const local=syncDoc();const lh=docHash(local);
     let file=S.prefs.gdrive.fileId?{id:S.prefs.gdrive.fileId}:null;
     let remote=null;
+    if(file){try{const m=await (await driveFetch(`${DRIVE.api}/files/${file.id}?fields=id,trashed`)).json();if(m.trashed){file=null;S.prefs.gdrive.fileId=null;}}catch(e){if(/404/.test(e.message)){file=null;S.prefs.gdrive.fileId=null;}else throw e;}}
     if(!file){const f=await driveFind();if(f){file=f;S.prefs.gdrive.fileId=f.id;}}
     if(file){try{remote=await driveDownload(file.id);}catch(e){if(/404/.test(e.message)){file=null;S.prefs.gdrive.fileId=null;}else throw e;}}
     const merged=remote?mergeDocs(local,remote):local;
@@ -1462,7 +1463,7 @@ function syncStatusLine(){const g=S.prefs.gdrive||{};if(sync.busy)return "Syncin
 })();
 /* After a deploy the old cached app runs once while the new service worker installs.
    When the new one takes over, reload once so the new build is what you see. */
-const APP_VERSION="20261018n";
+const APP_VERSION="20261018o";
 let swReg=null;
 function setupUpdates(){
   if(!("serviceWorker" in navigator))return;
