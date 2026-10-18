@@ -1,33 +1,56 @@
-/* Binder service worker: precache the app shell and card index on install,
-   cache the OCR engine the first time it is fetched, serve everything
-   cache-first afterwards so the app works with no network at all.
-   Bump VERSION whenever app.js, app.css or the data files change. */
-const VERSION = "binder-2026-10-17d";
-const ART = "binder-art"; // survives app updates; trimmed to ART_MAX entries
+/* Binder service worker.
+   - Precaches the app shell and card index on install, bypassing the HTTP cache so a new
+     version never installs with stale files (GitHub Pages serves 10-minute max-age).
+   - Reuses the previous version's copy of the big data files when they are unchanged.
+   - Caches the OCR engine on first use and card art as it is viewed (separate cache that
+     survives app updates, trimmed at ART_MAX).
+   - Serves everything cache-first afterwards; navigations are network-first.
+   Bump VERSION whenever an app file changes; bump DATA_VERSION only when data/ changes. */
+const VERSION = "binder-20261017e";
+const DATA_VERSION = "data-20261017";
+const ART = "binder-art";
 const ART_MAX = 4000;
-const SHELL = [
+
+const APP_FILES = [
   "./",
   "./index.html",
-  "./css/app.css",
-  "./js/app.js",
-  "./js/vendor/tesseract.min.js",
+  "./css/binder.css?v=20261017e",
+  "./js/binder.js?v=20261017e",
+  "./js/vendor/tesseract.min.js?v=5.1.1",
   "./manifest.webmanifest",
   "./icons/icon-192.png",
   "./icons/icon-512.png",
-  "./data/sets.json",
-  "./data/cards0.json",
-  "./data/cards1.json",
 ];
-const RUNTIME_PREFIXES = ["ocr/", "data/", "js/", "css/", "icons/"];
+const DATA_FILES = ["./data/sets.json", "./data/cards0.json", "./data/cards1.json"];
+const RUNTIME_PREFIXES = ["/ocr/", "/data/", "/js/", "/css/", "/icons/"];
 
 self.addEventListener("install", (e) => {
-  e.waitUntil(caches.open(VERSION).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
+  e.waitUntil((async () => {
+    const c = await caches.open(VERSION);
+    await Promise.all(APP_FILES.map((u) => fetch(new Request(u, { cache: "reload" })).then((r) => { if (!r.ok) throw new Error(u + " " + r.status); return c.put(u, r); })));
+    // Data: reuse an older cache's copy when the data version is unchanged, else fetch fresh.
+    const old = (await caches.keys()).filter((k) => k !== VERSION && k !== ART);
+    for (const u of DATA_FILES) {
+      let hit = null;
+      for (const k of old) {
+        const oc = await caches.open(k);
+        const stamp = await oc.match("./data-version");
+        if (stamp && (await stamp.text()) === DATA_VERSION) { hit = await oc.match(u); if (hit) break; }
+      }
+      if (hit) await c.put(u, hit);
+      else { const r = await fetch(new Request(u, { cache: "reload" })); if (!r.ok) throw new Error(u + " " + r.status); await c.put(u, r); }
+    }
+    await c.put("./data-version", new Response(DATA_VERSION));
+    await self.skipWaiting();
+  })());
 });
 
 self.addEventListener("activate", (e) => {
-  e.waitUntil(
-    caches.keys().then((keys) => Promise.all(keys.filter((k) => k !== VERSION && k !== ART).map((k) => caches.delete(k)))).then(() => self.clients.claim())
-  );
+  e.waitUntil((async () => {
+    const keys = await caches.keys();
+    await Promise.all(keys.filter((k) => k !== VERSION && k !== ART).map((k) => caches.delete(k)));
+    await self.clients.claim();
+  })());
 });
 
 self.addEventListener("fetch", (e) => {
@@ -36,34 +59,23 @@ self.addEventListener("fetch", (e) => {
   const url = new URL(req.url);
   const sameOrigin = url.origin === self.location.origin;
   const fontHost = url.hostname === "fonts.googleapis.com" || url.hostname === "fonts.gstatic.com";
-  const artHost = url.hostname === "cards.scryfall.io";
-  if (artHost) {
-    e.respondWith(
-      caches.open(ART).then((c) => c.match(req).then((hit) => hit || fetch(req).then((res) => {
-        if (res.ok || res.type === "opaque") { c.put(req, res.clone()); trimArt(c); }
-        return res;
-      })))
-    );
+  if (url.hostname === "cards.scryfall.io") {
+    e.respondWith(caches.open(ART).then((c) => c.match(req).then((hit) => hit || fetch(req).then((res) => {
+      if (res.ok || res.type === "opaque") { c.put(req, res.clone()); trimArt(c); }
+      return res;
+    }))));
     return;
   }
   if (!sameOrigin && !fontHost) return;
-
   if (req.mode === "navigate") {
-    e.respondWith(fetch(req).then((res) => { const copy = res.clone(); caches.open(VERSION).then((c) => c.put("./index.html", copy)); return res; }).catch(() => caches.match("./index.html")));
+    e.respondWith(fetch(req).then((res) => { caches.open(VERSION).then((c) => c.put("./index.html", res.clone())); return res; })
+      .catch(() => caches.open(VERSION).then((c) => c.match("./index.html"))));
     return;
   }
-  e.respondWith(
-    caches.match(req, { ignoreSearch: true }).then((hit) => {
-      if (hit) return hit;
-      return fetch(req).then((res) => {
-        if (res.ok && (fontHost || RUNTIME_PREFIXES.some((p) => url.pathname.includes("/" + p)))) {
-          const copy = res.clone();
-          caches.open(VERSION).then((c) => c.put(req, copy));
-        }
-        return res;
-      });
-    })
-  );
+  e.respondWith(caches.open(VERSION).then((c) => c.match(req).then((hit) => hit || fetch(req).then((res) => {
+    if (res.ok && (fontHost || RUNTIME_PREFIXES.some((p) => url.pathname.includes(p)))) c.put(req, res.clone());
+    return res;
+  }))));
 });
 
 let trimming = false;

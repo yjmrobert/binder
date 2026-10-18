@@ -19,8 +19,8 @@ Everything is stored in the browser's local storage. Add the page to your home s
 
 ```
 index.html              app shell
-css/app.css             theme tokens (dark-first, light under prefers-color-scheme) and components
-js/app.js               the whole app: index loading, search, OCR pipeline, scan, binder, decks
+css/binder.css          theme tokens (dark-first, light under prefers-color-scheme) and components
+js/binder.js            the whole app: index loading, search, OCR pipeline, scan, binder, decks
 js/vendor/              tesseract.js 5.1.1 main script
 ocr/                    tesseract.js worker, LSTM core (simd + fallback), English model (fast int)
 data/                   card index: 36k cards, 114k printings (with Scryfall ids), 774 sets
@@ -40,11 +40,11 @@ git clone --depth 1 https://github.com/taw/magic-search-engine tools/magic-searc
 python3 tools/build-index.py tools/magic-search-engine
 ```
 
-Then bump `VERSION` in `sw.js` (and `APP_VERSION` in `js/app.js`) so installed clients fetch the new files; open clients reload themselves once the new service worker takes over.
+Then bump `DATA_VERSION` in `sw.js`. For app changes, bump `VERSION` in `sw.js`, the `?v=` on the two asset URLs in `index.html` and `sw.js`, and `APP_VERSION` in `js/binder.js`; open clients reload themselves once the new service worker takes over. The install step fetches with `cache: "reload"` so GitHub Pages' 10-minute HTTP cache can never seed a new version with stale files.
 
 ## Recognition notes
 
-`recognize(file)` in `js/app.js` is the whole pipeline:
+`recognize(file)` in `js/binder.js` is the whole pipeline:
 
 1. Grayscale the image; OCR the top 30% (page segmentation mode 6) for the name, falling back to a sparse-text pass over the whole image if the match is weak.
 2. Match against all 36k names: trigram candidate pass, then Dice similarity, with a penalty for short names matching inside long lines.

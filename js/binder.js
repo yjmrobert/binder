@@ -593,7 +593,8 @@ function rMore(){
   const el=$("#v-more");
   el.innerHTML=`<div class="top"><h1>More</h1></div>
   <div class="sect"><div style="display:flex;justify-content:space-between"><span>Collection</span><span class="mono">${totalOwned()} cards</span></div><div style="display:flex;justify-content:space-between;margin-top:6px"><span>Printings</span><span class="mono">${Object.keys(S.col).length}</span></div><div style="display:flex;justify-content:space-between;margin-top:6px"><span>Index</span><span class="mono">${INDEX.length.toLocaleString()} cards · ${Object.keys(SETS).length} sets</span></div><div style="display:flex;justify-content:space-between;margin-top:6px"><span>Index built</span><span class="mono">2026-10-17</span></div><div style="display:flex;justify-content:space-between;margin-top:6px"><span>OCR engine</span><span class="mono" id="ocrstate">${ocrState==="ready"?"ready":ocrState==="failed"?"unavailable":ocrState==="loading"?"starting…":"starts on first scan"}</span></div><div style="display:flex;justify-content:space-between;margin-top:6px"><span>Auto-accept threshold</span><span class="mono">${THRESHOLD}%</span></div><div style="display:flex;justify-content:space-between;margin-top:6px"><span>App version</span><span class="mono">${APP_VERSION}</span></div></div>
-  <button class="btn" id="checkupd" style="margin-top:10px">Check for updates</button>
+  <div class="btnrow" style="margin-top:10px"><button class="btn" id="checkupd">Check for updates</button><button class="btn" id="clearcache">Reset app cache</button></div>
+  <div class="note">Reset re-downloads the app, index and OCR engine on next load. Your collection stays.</div>
   ${ocrState==="idle"?'<button class="btn" id="warm" style="margin-top:10px">Start OCR engine now</button>':""}
   ${ocrState==="failed"?`<div class="sect warn" style="margin-top:10px;font-size:12.5px">${esc(ocrErr)}</div>`:""}
   <div class="h">Card images</div>
@@ -608,6 +609,7 @@ function rMore(){
   $("#demo").onclick=()=>{S=seed();save();lastImg=null;go("search");toast("Demo collection loaded");};
   $("#reset").onclick=()=>{if(!confirmReset){confirmReset=true;$("#reset").textContent="Tap again to clear";setTimeout(()=>{confirmReset=false;const b=$("#reset");if(b)b.textContent="Clear everything";},4000);return;}confirmReset=false;S=empty();save();lastImg=null;go("search");toast("Collection cleared");};
   $("#checkupd").onclick=async()=>{const b=$("#checkupd");b.disabled=true;b.textContent="Checking…";try{if(swReg)await swReg.update();}catch(e){}setTimeout(()=>{if(document.contains(b)){b.disabled=false;b.textContent="Check for updates";toast("You're on the latest version");}},2500);};
+  $("#clearcache").onclick=async()=>{const b=$("#clearcache");b.disabled=true;b.textContent="Resetting…";try{if("serviceWorker" in navigator){const rs=await navigator.serviceWorker.getRegistrations();await Promise.all(rs.map(r=>r.unregister()));}if(window.caches){const ks=await caches.keys();await Promise.all(ks.map(k=>caches.delete(k)));}}catch(e){}location.reload();};
   $("#imgtoggle").onclick=()=>{S.prefs=S.prefs||{};S.prefs.images=!imagesOn();save();rMore();};
   const wm=$("#warm");if(wm)wm.onclick=async()=>{wm.disabled=true;wm.textContent="Starting…";await getOCR();rMore();toast(ocrState==="ready"?"OCR ready":"OCR couldn't start");};
 }
@@ -636,12 +638,12 @@ function copyText(txt,msg){
 })();
 /* After a deploy the old cached app runs once while the new service worker installs.
    When the new one takes over, reload once so the new build is what you see. */
-const APP_VERSION="2026-10-17d";
+const APP_VERSION="20261017e";
 let swReg=null;
 function setupUpdates(){
   if(!("serviceWorker" in navigator))return;
   const hadController=!!navigator.serviceWorker.controller;
-  navigator.serviceWorker.register("./sw.js").then(reg=>{swReg=reg;
+  navigator.serviceWorker.register("./sw.js",{updateViaCache:"none"}).then(reg=>{swReg=reg;
     reg.addEventListener("updatefound",()=>{const nw=reg.installing;if(!nw)return;nw.addEventListener("statechange",()=>{if(nw.state==="installed"&&navigator.serviceWorker.controller)toast("Update ready, reloading…");});});
   }).catch(()=>{});
   let done=false;
