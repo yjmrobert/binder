@@ -47,10 +47,13 @@ Then bump `DATA_VERSION` in `sw.js`. For app changes, bump `VERSION` in `sw.js`,
 
 `recognize(file)` in `js/binder.js` is the whole pipeline:
 
-1. Grayscale the image; OCR the top 30% (page segmentation mode 6) for the name, falling back to a sparse-text pass over the whole image if the match is weak.
-2. Match against all 36k names: trigram candidate pass, then Dice similarity, with a penalty for short names matching inside long lines.
-3. OCR the bottom 14% for the collector number and set code and pick the printing. Name plus number gives full confidence; name alone caps at 84%, which routes to the confirm sheet so the set is the only decision.
-4. `THRESHOLD` (85) decides auto-accept versus confirm.
+1. Quality gates on the title band: Laplacian-variance sharpness and a blown-highlight share for glare. Live mode skips frames that fail; photo mode lowers confidence.
+2. OCR the top 30% (page segmentation mode 6) as grayscale; if the name match is under 0.92, retry an Otsu-thresholded copy, then an inverted copy (light-on-dark titles). Photo mode also falls back to a sparse-text pass over the whole image.
+3. Match against all 36k names: trigram candidate pass, then Dice similarity, with a penalty for short names matching inside long lines.
+4. OCR the type line (55–67%) and compare it with the candidate's type line; OCR the bottom 14% for the collector number and set code to pin the printing; sample the side margins for the frame colour and compare with the candidate's colour identity.
+5. Composite confidence: name score, plus a small bonus for an agreeing type line, a penalty for a disagreeing type line or frame colour or a soft image, then capped at 84/78/72 when the printing is not confirmed so the set becomes the only decision on the sheet. `THRESHOLD` (85) decides auto-accept versus confirm. Every signal is stored on the copy (`sig`) so weights can be retuned from real corrections.
+
+Live mode samples the guide region every 120 ms at thumbnail size: motion against the previous sample, sharpness, and a difference hash. Three still, sharp samples trigger recognition on the full-resolution crop; the next add is armed only once the region differs from the sample taken at add time (hash distance or mean brightness change), so hovering never double-adds but flipping through four copies adds four.
 
 If the OCR engine can't start (no WebAssembly), the Scan screen says so and falls back to a demo recognizer so the rest of the flows stay usable.
 
