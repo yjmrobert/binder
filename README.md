@@ -6,7 +6,7 @@ Live: https://www.yjmrobert.com/binder/ (the github.io address redirects there)
 
 ## What it does
 
-- **Scan** — live camera viewfinder (or a photo from the gallery). Tesseract.js reads the title band and the collector line; the name is fuzzy-matched against the full index and the printing is pinned from the set code and number. Confident matches go straight in; uncertain ones open a compare sheet or land in a review queue.
+- **Scan** — continuous: open the camera and pan over cards. When the frame is still and sharp and shows a different card from the last one, it is read on-device and added with a banner, a vibration and a click; uncertain matches go to the review queue without interrupting. Manual Capture and gallery photos still work. Tesseract.js reads the title band (three preprocessing variants), the type line and the collector line; the name is fuzzy-matched against the full index, the printing pinned from set code and number, and a frame-colour check guards against wrong matches.
 - **Search** — the whole index with a Scryfall-style syntax subset: `t:goblin c:r mv<=2 owned`, `e:fdn -owned`, `o:draw`, `foil`. Colour-identity pip filters, owned-first sort.
 - **Binder** — your collection by colour identity, nine cards a page, with set breakdowns.
 - **Decks** — paste a decklist (Arena, Moxfield or plain lines), see what you own and what's missing, and get substitutes suggested from cards you already have.

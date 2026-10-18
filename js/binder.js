@@ -140,7 +140,7 @@ function pricesAsOf(){let newest=0;for(const k in (S.prices||{})){const a=S.pric
 function ago(ts){if(!ts)return "never";const m=Math.round((Date.now()-ts)/60000);if(m<2)return "just now";if(m<60)return m+" min ago";const h=Math.round(m/60);if(h<48)return h+" h ago";return Math.round(h/24)+" days ago";}
 
 /* Re-render the current screen without losing scroll position or a focused input. */
-function rerender(){const a=document.activeElement;if(a&&/^(input|textarea)$/i.test(a.tagName))return;if($("#overlay").classList.contains("on"))return;const el=$("#v-"+view);const st=el?el.scrollTop:0;render();if(el)el.scrollTop=st;}
+function rerender(){const a=document.activeElement;if(a&&/^(input|textarea)$/i.test(a.tagName))return;if($("#overlay").classList.contains("on"))return;if(camOn&&view==="scan"){updateLiveUI();return;}const el=$("#v-"+view);const st=el?el.scrollTop:0;render();if(el)el.scrollTop=st;}
 
 /* ========================= NAV ========================= */
 let view="search",stack=[],curArg=null;
@@ -336,8 +336,30 @@ async function loadBitmap(file){
   try{return await createImageBitmap(file,{imageOrientation:"from-image"});}
   catch(e){return await new Promise((res,rej)=>{const img=new Image();const u=URL.createObjectURL(file);img.onload=()=>res(img);img.onerror=rej;img.src=u;});}
 }
-function crop(src,x,y,w,h,scale){const cv=document.createElement("canvas");cv.width=Math.round(w*scale);cv.height=Math.round(h*scale);const ctx=cv.getContext("2d");ctx.imageSmoothingEnabled=true;ctx.imageSmoothingQuality="high";ctx.drawImage(src,x,y,w,h,0,0,cv.width,cv.height);
+function crop(src,x,y,w,h,scale,keepColour){const cv=document.createElement("canvas");cv.width=Math.max(1,Math.round(w*scale));cv.height=Math.max(1,Math.round(h*scale));const ctx=cv.getContext("2d");ctx.imageSmoothingEnabled=true;ctx.imageSmoothingQuality="high";ctx.drawImage(src,x,y,w,h,0,0,cv.width,cv.height);
+  if(keepColour)return cv;
   const id=ctx.getImageData(0,0,cv.width,cv.height),d=id.data;for(let i=0;i<d.length;i+=4){const g=d[i]*.3+d[i+1]*.59+d[i+2]*.11;d[i]=d[i+1]=d[i+2]=g;}ctx.putImageData(id,0,0);return cv;}
+/* Image variants for the title band: a thresholded copy (Otsu) for low-contrast prints and an
+   inverted copy for light-on-dark titles (showcase frames, full-art lands, Secret Lairs). */
+function grayData(cv){return cv.getContext("2d").getImageData(0,0,cv.width,cv.height);}
+function variant(cv,kind){const out=document.createElement("canvas");out.width=cv.width;out.height=cv.height;const ctx=out.getContext("2d");const id=grayData(cv),d=id.data;
+  if(kind==="invert"){for(let i=0;i<d.length;i+=4){d[i]=255-d[i];d[i+1]=255-d[i+1];d[i+2]=255-d[i+2];}}
+  else if(kind==="otsu"){const hist=new Array(256).fill(0);for(let i=0;i<d.length;i+=4)hist[d[i]]++;const n=d.length/4;let sum=0;for(let t=0;t<256;t++)sum+=t*hist[t];let sumB=0,wB=0,best=0,thr=127;for(let t=0;t<256;t++){wB+=hist[t];if(!wB)continue;const wF=n-wB;if(!wF)break;sumB+=t*hist[t];const mB=sumB/wB,mF=(sum-sumB)/wF;const v=wB*wF*(mB-mF)*(mB-mF);if(v>best){best=v;thr=t;}}
+    for(let i=0;i<d.length;i+=4){const v=d[i]>thr?255:0;d[i]=d[i+1]=d[i+2]=v;}}
+  ctx.putImageData(id,0,0);return out;}
+/* Quality gates: sharpness = variance of a Laplacian on a small gray copy; glare = share of blown-out pixels. */
+function quality(cv){const w=Math.min(160,cv.width),h=Math.round(cv.height*w/cv.width)||1;const t=document.createElement("canvas");t.width=w;t.height=h;t.getContext("2d").drawImage(cv,0,0,w,h);const d=t.getContext("2d").getImageData(0,0,w,h).data;
+  const g=new Float32Array(w*h);let bright=0;for(let i=0,j=0;i<d.length;i+=4,j++){g[j]=d[i]*.3+d[i+1]*.59+d[i+2]*.11;if(d[i]>245&&d[i+1]>245&&d[i+2]>245)bright++;}
+  let sum=0,sum2=0,n=0;for(let y=1;y<h-1;y++)for(let x=1;x<w-1;x++){const i=y*w+x;const l=4*g[i]-g[i-1]-g[i+1]-g[i-w]-g[i+w];sum+=l;sum2+=l*l;n++;}
+  const mean=sum/n;const sharp=sum2/n-mean*mean;return {sharp,glare:bright/(w*h)};}
+/* Frame colour from the card's side margins: a confident single hue that the matched card's
+   colour identity does not contain is a strong sign of a wrong match. */
+function frameColour(cv){const w=cv.width,h=cv.height;const ctx=cv.getContext("2d");const samples=[];for(const [x0,x1] of [[0,Math.max(1,Math.round(w*.03))],[w-Math.max(1,Math.round(w*.03)),w]]){const d=ctx.getImageData(x0,Math.round(h*.15),x1-x0,Math.round(h*.7)).data;for(let i=0;i<d.length;i+=16)samples.push([d[i],d[i+1],d[i+2]]);}
+  if(!samples.length)return null;let votes={W:0,U:0,B:0,R:0,G:0,A:0,M:0};for(const [r,g,b] of samples){const max=Math.max(r,g,b),min=Math.min(r,g,b),v=max/255,sat=max?(max-min)/max:0;let hue=0;if(max!==min){if(max===r)hue=((g-b)/(max-min)+6)%6;else if(max===g)hue=(b-r)/(max-min)+2;else hue=(r-g)/(max-min)+4;hue*=60;}
+    if(v<.22)votes.B++;else if(sat<.18)votes[v>.75?"W":"A"]++;else if(hue<20||hue>=340)votes.R++;else if(hue<65)votes[v>.6&&sat<.55?"W":"M"]++;else if(hue<170)votes.G++;else if(hue<260)votes.U++;else votes.B++;}
+  const total=samples.length;const top=Object.entries(votes).sort((a,b)=>b[1]-a[1])[0];return {colour:top[0],share:top[1]/total};}
+function colourAgree(card,fc){if(!fc||fc.share<.6)return null;const c=fc.colour;if(c==="A"||c==="M")return null;const ci=card.ci;if(!ci.length)return c==="B"||c==="W"?null:false;if(ci.length>1)return c==="M"||ci.includes(c)?true:null;return ci[0]===c;}
+async function ocrText(w,cv){const r=await w.recognize(cv);return r.data.text||"";}
 let TRI=null;
 function norm(s){return s.toLowerCase().replace(/[^a-z0-9 ]+/g," ").replace(/\s+/g," ").trim();}
 function trigrams(s){const t=" "+s+" ";const out=[];for(let i=0;i<t.length-2;i++)out.push(t.slice(i,i+3));return out;}
@@ -369,33 +391,55 @@ function matchPrint(card,text){
   if(byNum.length)return {print:byNum[0],conf:.7,how:"number (several sets)"};
   return {print:defaultPrint(card),conf:.5,how:"default"};
 }
-async function recognize(file){
+/* recognize(src, opts): src is a Blob (photo) or a canvas/bitmap (live frame). Returns
+   {guess, print, conf, alts, how, signals} or {guess:null}. Signals carry every score so the
+   compare sheet can show why, and so weights can be retuned from logged corrections later.
+   opts.fast (live mode): no whole-image fallback, variants only when the first pass is weak. */
+async function recognize(src,opts={}){
   const w=await getOCR();
   if(!w)return null;
-  const bmp=await loadBitmap(file);
+  const bmp=(src instanceof Blob)?await loadBitmap(src):src;
   const W=bmp.width,H=bmp.height;const scale=Math.min(1,1600/W);
+  const colourBand=crop(bmp,0,0,W,H,Math.min(1,400/W),true);
   const band=crop(bmp,0,0,W,H*.3,scale*1.5);
-  const foot=crop(bmp,0,H*.86,W,H*.14,scale*1.5);
+  const q=quality(band);
+  const signals={sharp:Math.round(q.sharp),glare:+q.glare.toFixed(3),variants:["gray"]};
   await w.setParameters({tessedit_pageseg_mode:"6"});
-  const r1=await w.recognize(band);
-  let cands=matchName(r1.data.text);
-  if(!cands.length||cands[0].score<.6){
+  let text=await ocrText(w,band);let cands=matchName(text);
+  const good=()=>cands.length&&cands[0].score>=.92;
+  if(!good()){const t2=await ocrText(w,variant(band,"otsu"));const c2=matchName(t2);signals.variants.push("otsu");if(c2.length&&(!cands.length||c2[0].score>cands[0].score)){cands=c2;text=t2;}}
+  if(!good()){const t3=await ocrText(w,variant(band,"invert"));const c3=matchName(t3);signals.variants.push("invert");if(c3.length&&(!cands.length||c3[0].score>cands[0].score)){cands=c3;text=t3;}}
+  if(!opts.fast&&(!cands.length||cands[0].score<.6)){
     await w.setParameters({tessedit_pageseg_mode:"11"});
-    const r3=await w.recognize(crop(bmp,0,0,W,H,scale));
-    const c2=matchName(r3.data.text);
-    if(c2.length&&(!cands.length||c2[0].score>cands[0].score))cands=c2;
+    const t4=await ocrText(w,crop(bmp,0,0,W,H,scale));const c4=matchName(t4);signals.variants.push("sparse");
+    if(c4.length&&(!cands.length||c4[0].score>cands[0].score)){cands=c4;text=t4;}
+    await w.setParameters({tessedit_pageseg_mode:"6"});
   }
-  if(bmp.close)bmp.close();
-  if(!cands.length)return {guess:null,text:r1.data.text};
-  await w.setParameters({tessedit_pageseg_mode:"6"});
-  const r2=await w.recognize(foot);
-  const best=cands[0];const pm=matchPrint(best.card,r2.data.text);
-  let conf=Math.round(Math.pow(best.score,.7)*100);
+  if(!cands.length){if(bmp.close&&src instanceof Blob)bmp.close();return {guess:null,text,signals};}
+  const best=cands[0];signals.name=+best.score.toFixed(3);
+  // Second text signal: the type line, matched against the candidate's type line.
+  const typeText=norm(await ocrText(w,crop(bmp,0,H*.55,W,H*.12,scale*1.5)));
+  const typeNorm=norm(best.card.type);
+  signals.type=typeText.length>=4?+Math.max(dice(typeText,typeNorm),...typeNorm.split(" ").filter(x=>x.length>3).map(x=>typeText.includes(x)?.8:0)).toFixed(2):null;
+  // Frame colour guard.
+  const fc=frameColour(colourBand);signals.frame=fc?fc.colour+" "+Math.round(fc.share*100)+"%":null;signals.colour=colourAgree(best.card,fc);
+  // Printing from the collector line.
+  const foot=crop(bmp,0,H*.86,W,H*.14,scale*1.5);
+  const footText=await ocrText(w,foot);
+  const pm=matchPrint(best.card,footText);signals.print=pm.conf;signals.how=pm.how;
+  if(bmp.close&&src instanceof Blob)bmp.close();
+  // Composite confidence.
+  let conf=Math.pow(best.score,.7)*100;
+  if(signals.type!=null){if(signals.type>=.6)conf=Math.min(100,conf+4);else if(signals.type<.25&&best.score<.97)conf-=12;}
+  if(signals.colour===false)conf-=15;
+  if(q.sharp<40)conf-=6;
+  conf=Math.round(Math.max(5,conf));
   if(pm.conf<1)conf=Math.min(conf,pm.conf>=.85?84:pm.conf>=.7?78:72);
+  signals.conf=conf;
   const alts=[];
   for(const p of best.card.prints.slice(0,6)){if(p!==pm.print)alts.push({id:best.card.id,set:p.set,num:p.num,conf:Math.max(10,conf-10-alts.length*4)});}
   for(const c of cands.slice(1,3)){const p=defaultPrint(c.card);alts.push({id:c.card.id,set:p.set,num:p.num,conf:Math.round(Math.pow(c.score,.7)*90)});}
-  return {guess:best.card.id,print:{set:pm.print.set,num:pm.print.num},conf,alts:alts.sort((a,b)=>b.conf-a.conf),how:pm.how,text:r1.data.text};
+  return {guess:best.card.id,print:{set:pm.print.set,num:pm.print.num},conf,alts:alts.sort((a,b)=>b.conf-a.conf),how:pm.how,text,signals};
 }
 /* Fallback when the OCR engine cannot start in this viewer: deterministic pick from the image bytes, so the flows still work. */
 async function recognizeStub(file){
@@ -420,9 +464,89 @@ async function openCamera(){
   rScan();
   if(camOn)getOCR();
 }
-function closeCamera(){if(stream){stream.getTracks().forEach(t=>t.stop());stream=null;}camOn=false;}
+function closeCamera(){stopLive();if(stream){stream.getTracks().forEach(t=>t.stop());stream=null;}camOn=false;}
+
+/* ---- Continuous mode ----
+   The camera stays open. Every ~120 ms the guide region is sampled at thumbnail size: motion
+   (mean difference from the previous sample), sharpness (Laplacian variance) and a difference
+   hash. When the view has been still and sharp for three samples, and looks different from the
+   card last added, the full-resolution guide crop goes to recognition. The result becomes a
+   banner and a tray entry, never a sheet; uncertain matches go to the review queue. The next add
+   is armed only once the region has changed substantially (card lifted, next one in). */
+let live={on:true,timer:null,prevGray:null,still:0,lastHash:null,lastGray:null,armed:true,busy:false,cooldownUntil:0,fails:0,sound:true};
+function liveOn(){return live.on&&camOn;}
+function sampleGuide(v,g,w,h,keepColour){
+  const vr=v.getBoundingClientRect(),gr=g.getBoundingClientRect();if(!vr.width||!gr.width)return null;
+  const scale=Math.max(vr.width/v.videoWidth,vr.height/v.videoHeight);
+  const offX=(vr.width-v.videoWidth*scale)/2,offY=(vr.height-v.videoHeight*scale)/2;
+  let sx=(gr.left-vr.left-offX)/scale,sy=(gr.top-vr.top-offY)/scale,sw=gr.width/scale,sh=gr.height/scale;
+  sx=Math.max(0,sx);sy=Math.max(0,sy);sw=Math.min(sw,v.videoWidth-sx);sh=Math.min(sh,v.videoHeight-sy);
+  if(sw<8||sh<8)return null;
+  const cv=document.createElement("canvas");cv.width=w||Math.round(sw);cv.height=h||Math.round(sh);
+  cv.getContext("2d").drawImage(v,sx,sy,sw,sh,0,0,cv.width,cv.height);
+  if(keepColour)return cv;
+  return cv;
+}
+function dhash(cv){const t=document.createElement("canvas");t.width=9;t.height=8;t.getContext("2d").drawImage(cv,0,0,9,8);const d=t.getContext("2d").getImageData(0,0,9,8).data;const bits=[];for(let y=0;y<8;y++)for(let x=0;x<8;x++){const i=(y*9+x)*4,j=(y*9+x+1)*4;const a=d[i]*.3+d[i+1]*.59+d[i+2]*.11,b=d[j]*.3+d[j+1]*.59+d[j+2]*.11;bits.push(a>b?1:0);}return bits;}
+function hamming(a,b){if(!a||!b)return 64;let n=0;for(let i=0;i<64;i++)if(a[i]!==b[i])n++;return n;}
+function grayOf(cv){const d=cv.getContext("2d").getImageData(0,0,cv.width,cv.height).data;const g=new Float32Array(d.length/4);for(let i=0,j=0;i<d.length;i+=4,j++)g[j]=d[i]*.3+d[i+1]*.59+d[i+2]*.11;return g;}
+function startLive(){stopLive();live.prevGray=null;live.still=0;live.armed=true;live.lastHash=null;live.lastGray=null;live.fails=0;live.timer=setInterval(liveTick,120);}
+function stopLive(){if(live.timer){clearInterval(live.timer);live.timer=null;}}
+async function liveTick(){
+  if(!liveOn())return;
+  const v=$("#video"),g=$("#guide");if(!v||!g||!v.videoWidth)return;
+  const small=sampleGuide(v,g,48,66);if(!small)return;
+  const gray=grayOf(small);
+  let motion=255;if(live.prevGray&&live.prevGray.length===gray.length){let d=0;for(let i=0;i<gray.length;i++)d+=Math.abs(gray[i]-live.prevGray[i]);motion=d/gray.length;}
+  live.prevGray=gray;
+  const hash=dhash(small);
+  // Re-arm once the view has clearly changed from the card last added: hash distance or a
+  // large mean difference against the sample taken at add time (flat frames hash alike).
+  if(!live.armed&&live.lastGray){let d=0;for(let i=0;i<gray.length;i++)d+=Math.abs(gray[i]-live.lastGray[i]);d/=gray.length;if(hamming(hash,live.lastHash)>18||d>22){live.armed=true;live.fails=0;setLiveHint("");}}
+  if(motion<4.5)live.still++;else live.still=0;
+  if(live.busy||!live.armed||live.still<3||Date.now()<live.cooldownUntil)return;
+  const mid=sampleGuide(v,g,160,222);const q=quality(mid);
+  if(q.sharp<35){setLiveHint(q.sharp<8?"Looking for a card…":"Hold still, a little closer");return;}
+  if(q.glare>.12){setLiveHint("Glare on the card, tilt it");return;}
+  live.busy=true;setLiveHint("Reading…");
+  try{
+    const full=sampleGuide(v,g);
+    const r=await recognize(full,{fast:true});
+    if(r&&r.guess){
+      live.lastHash=hash;live.lastGray=gray;live.armed=false;live.fails=0;
+      const img=await thumbData(full);
+      if(r.conf>=THRESHOLD){commitScan(r,{quiet:true});liveBanner(r,"ok");feedback();}
+      else{S.review.push({id:"r"+Date.now(),guess:r.guess,print:r.print,conf:r.conf,alts:r.alts||[],img,at:today(),signals:r.signals});save();liveBanner(r,"review");feedback(true);}
+      setLiveHint("Next card");updateLiveUI();
+    }else{
+      live.fails++;live.cooldownUntil=Date.now()+900;
+      setLiveHint(live.fails>=3?"Can't read this one. Tap Capture, or type the name.":"Nothing readable yet");
+      if(live.fails>=3){live.lastHash=hash;live.lastGray=gray;live.armed=false;}
+    }
+  }catch(e){ocrErr=(e&&e.message)||String(e);setLiveHint("Scanner error: "+ocrErr);live.cooldownUntil=Date.now()+2000;}
+  live.busy=false;
+}
+function setLiveHint(t){const h=$("#livehint");if(h)h.textContent=t;}
+function liveBanner(r,kind){const b=$("#livebanner");if(!b)return;const card=BY_ID[r.guess];const p=card.prints.find(x=>x.set===r.print.set&&x.num===r.print.num);
+  b.className="livebanner "+kind;b.innerHTML=`${thumb(card,"sm","",p)}<div class="tx"><div class="n">${esc(card.name)}${kind==="review"?"?":""}</div><div class="d">${pr(r.print)} · ${r.conf}%${kind==="ok"?` · now ×${ownedOf(card.id)}`:" · sent to review"}</div></div>${kind==="ok"?'<button class="btn sm" id="liveundo">Undo</button>':'<button class="btn sm" id="livefix">Fix</button>'}`;
+  b.hidden=false;clearTimeout(b._t);b._t=setTimeout(()=>{b.hidden=true;},kind==="ok"?3500:6000);
+  const u=$("#liveundo");if(u)u.onclick=()=>{undoLast(r);b.hidden=true;updateLiveUI();};
+  const f=$("#livefix");if(f)f.onclick=()=>{const item=S.review[S.review.length-1];if(item)openMatchSheet(item,true);};
+}
+function undoLast(r){const card=BY_ID[r.guess];const k=pk(card.id,r.print.set,r.print.num);const e=S.col[k];if(e){e.copies.pop();if(!e.copies.length)delete S.col[k];}const i=S.session.map(x=>x.id+x.set+x.num).lastIndexOf(card.id+r.print.set+r.print.num);if(i>-1)S.session.splice(i,1);save();toast("Removed "+card.name);}
+let audioCtx=null;
+function feedback(soft){try{if(navigator.vibrate)navigator.vibrate(soft?[20,40,20]:35);}catch(e){}
+  if(!live.sound)return;try{audioCtx=audioCtx||new (window.AudioContext||window.webkitAudioContext)();const o=audioCtx.createOscillator(),gn=audioCtx.createGain();o.type="sine";o.frequency.value=soft?440:880;gn.gain.value=.0001;o.connect(gn);gn.connect(audioCtx.destination);const t=audioCtx.currentTime;gn.gain.exponentialRampToValueAtTime(.15,t+.01);gn.gain.exponentialRampToValueAtTime(.0001,t+(soft?.18:.09));o.start(t);o.stop(t+.2);}catch(e){}}
+/* Update counters, tray and badge in place; a full rScan would recreate the video element. */
+function updateLiveUI(){
+  const ses=S.session;const sub=$("#v-scan .top .s");if(sub)sub.innerHTML=`Session · ${ses.length} added${S.review.length?` · <span style="color:var(--wn)">${S.review.length} to review</span>`:""}`;
+  const es=$("#endses");if(es)es.disabled=!ses.length;
+  const tray=$("#livetray");if(tray){tray.innerHTML=[...ses].reverse().slice(0,12).map(s=>{const card=BY_ID[s.id];const p=card.prints.find(x=>x.set===s.set&&x.num===s.num);return `<button data-card="${esc(card.id)}" title="${esc(card.name)}">${thumb(card,"md","",p)}</button>`;}).join("")||'<div class="empty" style="padding:12px">Pan over your cards; each one lands here as it is read.</div>';tray.querySelectorAll("[data-card]").forEach(b=>b.onclick=()=>go("card",{id:b.dataset.card}));}
+  const bd=$("#rvbadge");if(bd){bd.hidden=!S.review.length;bd.textContent=S.review.length;}
+  const tr=$("#torev");if(tr){tr.hidden=!S.review.length;tr.textContent=`Review ${S.review.length} uncertain scan${S.review.length>1?"s":""}`;}
+}
 async function captureFrame(){
-  const v=$("#video"),g=$("#guide");if(!v||!v.videoWidth||scanning)return;
+  const v=$("#video"),g=$("#guide");if(!v||!v.videoWidth||scanning||live.busy)return;
   const vr=v.getBoundingClientRect(),gr=g.getBoundingClientRect();
   const scale=Math.max(vr.width/v.videoWidth,vr.height/v.videoHeight);
   const offX=(vr.width-v.videoWidth*scale)/2,offY=(vr.height-v.videoHeight*scale)/2;
@@ -438,9 +562,12 @@ function rScan(){
   const el=$("#v-scan");const ses=S.session;
   const engine=ocrState==="failed"?`<div class="sect warn" style="margin-top:10px;font-size:12.5px">The OCR engine couldn't start in this browser (${esc(ocrErr)}). Scans use the demo recognizer until it can.</div>`:"";
   const camBox=camOn?`<div class="cam live"><video id="video" autoplay playsinline muted></video><div class="guide" id="guide"></div>
-      <div class="z mono" id="ocrmsg" style="font-size:11px;text-align:center">${scanning?esc(ocrMsg):ocrState==="ready"?"OCR ready":ocrState==="loading"?"Starting OCR…":""}</div>
+      <div class="livebanner" id="livebanner" hidden></div>
+      <div class="z mono" id="ocrmsg" style="font-size:11px;text-align:center">${scanning?esc(ocrMsg):ocrState==="loading"?"Starting OCR…":""}</div>
+      <div class="livehint" id="livehint">${ocrState==="ready"?"":"Starting the scanner…"}</div>
       ${scanning?'<div class="busy">Reading…</div>':""}
-      <div class="ctl"><label class="btn"><input type="file" id="file" accept="image/*">Photo</label><button class="btn pri" id="capture" ${scanning?"disabled":""}>Capture</button><button class="btn" id="camoff">Close</button></div></div>`
+      <div class="ctl"><button class="btn ${live.on?"pri":""}" id="liveauto" aria-pressed="${live.on}">${live.on?"Auto: on":"Auto: off"}</button><button class="btn" id="capture" ${scanning?"disabled":""}>Capture</button><button class="btn" id="livesound" aria-pressed="${live.sound}" title="Sound">${live.sound?"Sound on":"Muted"}</button><button class="btn" id="camoff">Close</button></div></div>
+      <div class="h">This session</div><div class="tray" id="livetray"></div>`
   :`<div class="cam">${lastImg?`<img src="${lastImg}" alt="">`:""}<div class="guide" id="guide"></div>
     <div class="btnrow z" style="margin-top:0;width:100%;max-width:320px"><button class="btn pri" id="camon" ${scanning?"disabled":""}>${scanning?"Reading…":"Open camera"}</button><label class="btn" style="${scanning?"opacity:.5;pointer-events:none":""}"><input type="file" id="file" accept="image/*" capture="environment">Photo</label></div>
     <div class="z mono" id="ocrmsg" style="font-size:11px;color:var(--mu);min-height:14px">${scanning?esc(ocrMsg):ocrState==="ready"?"OCR ready":""}</div>
@@ -452,17 +579,20 @@ function rScan(){
   <div class="top"><div><h1>Scan</h1><div class="s">Session · ${ses.length} added${S.review.length?` · <span style="color:var(--wn)">${S.review.length} to review</span>`:""}</div></div><button class="btn sm" id="endses" ${ses.length?"":"disabled"}>End session</button></div>
   ${camBox}
   ${engine}
-  <div class="h">Tray</div>
-  ${ses.length?`<div class="tray">${[...ses].reverse().map(s=>{const card=BY_ID[s.id];const p=card.prints.find(x=>x.set===s.set&&x.num===s.num);return `<button data-card="${esc(card.id)}" title="${esc(card.name)}">${thumb(card,"md","",p)}</button>`;}).join("")}</div>
+  ${camOn?"":'<div class="h">Tray</div>'}
+  ${camOn?"":ses.length?`<div class="tray">${[...ses].reverse().map(s=>{const card=BY_ID[s.id];const p=card.prints.find(x=>x.set===s.set&&x.num===s.num);return `<button data-card="${esc(card.id)}" title="${esc(card.name)}">${thumb(card,"md","",p)}</button>`;}).join("")}</div>
   <div class="lst">${[...ses].reverse().slice(0,8).map(s=>{const card=BY_ID[s.id];return `<button class="row" data-card="${esc(card.id)}">${stripe(card)}<div class="tx"><div class="n">${esc(card.name)}</div><div class="d">${s.set.toUpperCase()} ${esc(s.num)} · ${s.conf}%${s.conf>=THRESHOLD?"":" · confirmed"}</div></div><span class="q own">×${ownedOf(card.id)}</span></button>`;}).join("")}</div>`
   :`<div class="empty">Nothing scanned this session yet. Each card you capture lands here with its printing and confidence.</div>`}
-  ${S.review.length?`<button class="btn" id="torev" style="margin-top:12px">Review ${S.review.length} uncertain scan${S.review.length>1?"s":""}</button>`:""}`;
-  $("#file").onchange=e=>{const f=e.target.files[0];if(f)doScan(f);};
+  <button class="btn" id="torev" style="margin-top:12px" ${S.review.length?"":"hidden"}>Review ${S.review.length} uncertain scan${S.review.length>1?"s":""}</button>`;
+  const fi=$("#file");if(fi)fi.onchange=e=>{const f=e.target.files[0];if(f)doScan(f);};
   const sim=$("#simulate");if(sim)sim.onclick=()=>doScan(null);
   const con=$("#camon");if(con)con.onclick=openCamera;
   const coff=$("#camoff");if(coff)coff.onclick=()=>{closeCamera();rScan();};
   const cap=$("#capture");if(cap)cap.onclick=captureFrame;
-  const vid=$("#video");if(vid&&stream){vid.srcObject=stream;vid.play().catch(()=>{});}
+  const la=$("#liveauto");if(la)la.onclick=()=>{live.on=!live.on;S.prefs=S.prefs||{};S.prefs.live=live.on;save();rScan();};
+  const ls=$("#livesound");if(ls)ls.onclick=()=>{live.sound=!live.sound;S.prefs=S.prefs||{};S.prefs.sound=live.sound;save();rScan();};
+  const vid=$("#video");if(vid&&stream){vid.srcObject=stream;vid.play().catch(()=>{});if(live.on){getOCR().then(()=>{setLiveHint("");startLive();});}}
+  if(camOn)updateLiveUI();
   $("#endses").onclick=()=>{const n=S.session.length;S.session=[];save();rScan();toast(`Session closed · ${n} added`);};
   el.querySelectorAll("[data-card]").forEach(b=>b.onclick=()=>go("card",{id:b.dataset.card}));
   const tr=$("#torev");if(tr)tr.onclick=()=>go("review");
@@ -470,23 +600,25 @@ function rScan(){
 async function doScan(file){
   scanning=true;ocrMsg=file?"Preparing image…":"";
   lastImg=file?await thumbData(file):null;
-  rScan();
+  if(camOn){const c=$("#v-scan .cam");if(c&&!$("#v-scan .busy")){const b=document.createElement("div");b.className="busy";b.textContent="Reading…";c.appendChild(b);}}else rScan();
   let r=null;
   try{
     if(file){r=await recognize(file);if(r===null)r=await recognizeStub(file);}
     else r=await recognizeStub(null);
   }catch(e){ocrErr=(e&&e.message)||String(e);ocrState="failed";r=await recognizeStub(file);}
   scanning=false;
-  if(!r.guess){rScan();toast("Couldn't read a name. Try closer, or type it.");openTypeSheet(name=>{const c=BY_LOWER[name.toLowerCase()];if(c)openAddSheetScan(c,{conf:0,img:lastImg},false);});return;}
-  if(r.conf>=THRESHOLD){commitScan(r);rScan();}
-  else{rScan();openMatchSheet({...r,img:lastImg,at:today()});}
+  const refresh=()=>{if(camOn){const b=$("#v-scan .busy");if(b)b.remove();updateLiveUI();}else rScan();};
+  if(!r.guess){refresh();toast("Couldn't read a name. Try closer, or type it.");openTypeSheet(name=>{const c=BY_LOWER[name.toLowerCase()];if(c)openAddSheetScan(c,{conf:0,img:lastImg},false);});return;}
+  if(r.conf>=THRESHOLD){commitScan(r);refresh();}
+  else{refresh();openMatchSheet({...r,img:lastImg,at:today()});}
 }
-function thumbData(file){return new Promise(res=>{loadBitmap(file).then(img=>{const cv=document.createElement("canvas");const w=200,h=Math.round(200*img.height/img.width);cv.width=w;cv.height=h;cv.getContext("2d").drawImage(img,0,0,w,h);res(cv.toDataURL("image/jpeg",.7));}).catch(()=>res(null));});}
+function thumbData(file){return new Promise(res=>{const draw=img=>{const cv=document.createElement("canvas");const w=200,h=Math.round(200*img.height/img.width);cv.width=w;cv.height=h;cv.getContext("2d").drawImage(img,0,0,w,h);res(cv.toDataURL("image/jpeg",.7));};if(file instanceof Blob)loadBitmap(file).then(draw).catch(()=>res(null));else try{draw(file);}catch(e){res(null);}});}
 function commitScan(r,opts={}){
   const card=BY_ID[r.guess];
-  addCopy(S.col,card.id,r.print.set,r.print.num,{cond:opts.cond||"NM",foil:!!opts.foil,via:"scan",date:today(),conf:r.conf});
+  addCopy(S.col,card.id,r.print.set,r.print.num,{cond:opts.cond||"NM",foil:!!opts.foil,via:"scan",date:today(),conf:r.conf,sig:r.signals?{n:r.signals.name,t:r.signals.type,c:r.signals.colour,p:r.signals.print,s:r.signals.sharp}:undefined});
   S.session.push({id:card.id,set:r.print.set,num:r.print.num,conf:r.conf});
   save();
+  if(opts.quiet)return;
   toast(`${card.name} · ${r.print.set.toUpperCase()} ${r.print.num} · now ×${ownedOf(card.id)}`,()=>{const k=pk(card.id,r.print.set,r.print.num);const e=S.col[k];if(e){e.copies.pop();if(!e.copies.length)delete S.col[k];}const i=S.session.map(s=>s.id+s.set+s.num).lastIndexOf(card.id+r.print.set+r.print.num);if(i>-1)S.session.splice(i,1);save();render();});
 }
 function openMatchSheet(r,fromReview){
@@ -496,7 +628,7 @@ function openMatchSheet(r,fromReview){
     const pc=BY_ID[pick.id];
     $("#sheet").innerHTML=`<div class="grab"></div>
     <div class="compare"><div class="col"><div class="crop">${r.img?`<img src="${r.img}" alt="">`:""}</div>Your scan</div><span class="mu" style="align-self:center">→</span><div class="col">${thumb(pc,"lg","",pc.prints.find(p=>p.set===pick.set&&p.num===pick.num))}Best match</div></div>
-    <div style="text-align:center;margin-top:10px"><div style="font-weight:700;font-size:18px">${esc(pc.name)}</div><div class="meter" style="justify-content:center;margin-top:6px"><span>${pick.conf}%</span><div class="conf ${pick.conf>=THRESHOLD?"":pick.conf>=40?"wn":"bad"}" style="max-width:120px"><i style="width:${pick.conf}%"></i></div><span class="mono">${pick.set.toUpperCase()} ${esc(pick.num)}</span></div>${r.how?`<div class="mu" style="font-size:11px;margin-top:4px">printing from ${esc(r.how)}</div>`:""}</div>
+    <div style="text-align:center;margin-top:10px"><div style="font-weight:700;font-size:18px">${esc(pc.name)}</div><div class="meter" style="justify-content:center;margin-top:6px"><span>${pick.conf}%</span><div class="conf ${pick.conf>=THRESHOLD?"":pick.conf>=40?"wn":"bad"}" style="max-width:120px"><i style="width:${pick.conf}%"></i></div><span class="mono">${pick.set.toUpperCase()} ${esc(pick.num)}</span></div>${r.how?`<div class="mu" style="font-size:11px;margin-top:4px">printing from ${esc(r.how)}${r.signals?` · name ${Math.round((r.signals.name||0)*100)}%${r.signals.type!=null?" · type "+Math.round(r.signals.type*100)+"%":""}${r.signals.colour===false?" · frame colour disagrees":""}`:""}</div>`:""}</div>
     <div class="h">Candidates</div>
     <div class="lst">${list().map((a,i)=>{const ac=BY_ID[a.id];if(!ac)return "";const on=a.id===pick.id&&a.set===pick.set&&a.num===pick.num;return `<button class="row ${on?"":"dim"}" data-alt="${i}" style="min-height:52px">${stripe(ac)}${thumb(ac,"sm","",ac.prints.find(p=>p.set===a.set&&p.num===a.num))}<div class="tx"><div class="n">${esc(ac.name)}</div><div class="d">${a.set.toUpperCase()} ${esc(a.num)} · ${esc(setName(a.set))}</div></div><span class="q ${on?"own":""}">${a.conf}%</span></button>`;}).join("")}</div>
     <div class="btnrow"><button class="btn ghost" id="typeit">Type the name</button><button class="btn pri" id="accept">Accept ${pick.set.toUpperCase()} ${esc(pick.num)}</button></div>
@@ -809,11 +941,12 @@ function copyText(txt,msg){
   render();
   try{setupUpdates();}catch(e){}
   wantOwnedPrices();
+  if(S.prefs){if(S.prefs.live===false)live.on=false;if(S.prefs.sound===false)live.sound=false;}
   window.addEventListener("online",()=>{wantOwnedPrices();});
 })();
 /* After a deploy the old cached app runs once while the new service worker installs.
    When the new one takes over, reload once so the new build is what you see. */
-const APP_VERSION="20261017f";
+const APP_VERSION="20261017g";
 let swReg=null;
 function setupUpdates(){
   if(!("serviceWorker" in navigator))return;
