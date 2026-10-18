@@ -582,7 +582,12 @@ function closeCamera(){stopLive();cancelScan();if(stream){stream.getTracks().for
    card last added, the full-resolution guide crop goes to recognition. The result becomes a
    banner and a tray entry, never a sheet; uncertain matches go to the review queue. The next add
    is armed only once the region has changed substantially (card lifted, next one in). */
-let live={on:true,timer:null,prevGray:null,still:0,lastHash:null,lastGray:null,armed:true,busy:false,cooldownUntil:0,fails:0,sound:true};
+let live={on:true,timer:null,prevGray:null,still:0,lastHash:null,lastGray:null,armed:true,busy:false,cooldownUntil:0,fails:0,sound:true,sharpHist:[],state:""};
+/* The guide frame shows what the scanner is doing: seek (dashed), hold (solid white: a card is
+   there, waiting for it to settle), read (amber pulse), ok / review (green / amber, with a
+   full-screen flash so it registers without looking at the screen). */
+function setGuideState(s){if(live.state===s)return;live.state=s;const g=$("#guide");if(g)g.dataset.state=s;}
+function flash(kind){let f=$("#flash");if(!f){f=document.createElement("div");f.id="flash";document.body.appendChild(f);}f.classList.remove("go");void f.offsetWidth;f.style.background=kind==="ok"?"#fff":"#e9b451";f.classList.add("go");}
 function liveOn(){return live.on&&camOn;}
 function sampleGuide(v,g,w,h,keepColour){
   const vr=v.getBoundingClientRect(),gr=g.getBoundingClientRect();if(!vr.width||!gr.width)return null;
@@ -599,7 +604,7 @@ function sampleGuide(v,g,w,h,keepColour){
 function dhash(cv){const t=document.createElement("canvas");t.width=9;t.height=8;t.getContext("2d").drawImage(cv,0,0,9,8);const d=t.getContext("2d").getImageData(0,0,9,8).data;const bits=[];for(let y=0;y<8;y++)for(let x=0;x<8;x++){const i=(y*9+x)*4,j=(y*9+x+1)*4;const a=d[i]*.3+d[i+1]*.59+d[i+2]*.11,b=d[j]*.3+d[j+1]*.59+d[j+2]*.11;bits.push(a>b?1:0);}return bits;}
 function hamming(a,b){if(!a||!b)return 64;let n=0;for(let i=0;i<64;i++)if(a[i]!==b[i])n++;return n;}
 function grayOf(cv){const d=cv.getContext("2d").getImageData(0,0,cv.width,cv.height).data;const g=new Float32Array(d.length/4);for(let i=0,j=0;i<d.length;i+=4,j++)g[j]=d[i]*.3+d[i+1]*.59+d[i+2]*.11;return g;}
-function startLive(){stopLive();live.prevGray=null;live.still=0;live.armed=true;live.lastHash=null;live.lastGray=null;live.fails=0;live.timer=setInterval(liveTick,120);}
+function startLive(){stopLive();live.prevGray=null;live.still=0;live.armed=true;live.lastHash=null;live.lastGray=null;live.fails=0;live.sharpHist=[];live.state="";setGuideState("seek");live.timer=setInterval(liveTick,120);}
 function stopLive(){if(live.timer){clearInterval(live.timer);live.timer=null;}}
 async function liveTick(){
   if(!liveOn())return;
@@ -612,27 +617,36 @@ async function liveTick(){
   // Re-arm once the view has clearly changed from the card last added: hash distance or a
   // large mean difference against the sample taken at add time (flat frames hash alike).
   if(!live.armed&&live.lastGray){let d=0;for(let i=0;i<gray.length;i++)d+=Math.abs(gray[i]-live.lastGray[i]);d/=gray.length;if(hamming(hash,live.lastHash)>18||d>22){live.armed=true;live.fails=0;setLiveHint("");}}
-  if(motion<4.5)live.still++;else live.still=0;
-  if(live.busy||!live.armed||live.still<3||Date.now()<live.cooldownUntil)return;
+  if(motion<6)live.still++;else live.still=0;
+  if(live.busy)return;
+  if(!live.armed){setGuideState("seek");return;}
+  if(Date.now()<live.cooldownUntil)return;
   const mid=sampleGuide(v,g,160,222);const q=quality(mid);
-  if(q.sharp<35){setLiveHint(q.sharp<8?"Looking for a card…":"Hold still, a little closer");return;}
-  if(q.glare>.12){setLiveHint("Glare on the card, tilt it");return;}
-  live.busy=true;setLiveHint("Reading…");
+  // Sharpness is judged against the best this camera has produced recently, with a floor, so a
+  // phone whose preview never reaches the old absolute bar still gets to try; OCR is the real test.
+  live.sharpHist.push(q.sharp);if(live.sharpHist.length>25)live.sharpHist.shift();
+  const peak=Math.max(...live.sharpHist);const need=Math.min(35,Math.max(12,peak*.5));
+  if(q.sharp<8){setGuideState("seek");setLiveHint("Looking for a card…");return;}
+  if(live.still<3){setGuideState("hold");setLiveHint("Hold still…");return;}
+  if(q.sharp<need){setGuideState("hold");setLiveHint("Hold still, a little closer");return;}
+  if(q.glare>.12){setGuideState("hold");setLiveHint("Glare on the card, tilt it");return;}
+  live.busy=true;setGuideState("read");setLiveHint("Reading…");
   try{
     const full=sampleGuide(v,g);
     const r=await recognizeTimed(full,{fast:true},15000);
     if(r&&r.guess){
       live.lastHash=hash;live.lastGray=gray;live.armed=false;live.fails=0;
       const img=await thumbData(full);
-      if(r.conf>=THRESHOLD){commitScan(r,{quiet:true});liveBanner(r,"ok");feedback();}
-      else{S.review.push({id:"r"+Date.now(),guess:r.guess,print:r.print,conf:r.conf,alts:r.alts||[],img,at:today(),signals:r.signals});save();liveBanner(r,"review");feedback(true);}
-      setLiveHint("Next card");updateLiveUI();
+      if(r.conf>=THRESHOLD){commitScan(r,{quiet:true});liveBanner(r,"ok");flash("ok");setGuideState("ok");feedback();}
+      else{S.review.push({id:"r"+Date.now(),guess:r.guess,print:r.print,conf:r.conf,alts:r.alts||[],img,at:today(),signals:r.signals});save();liveBanner(r,"review");flash("review");setGuideState("review");feedback(true);}
+      setLiveHint("Got it. Next card");updateLiveUI();
+      setTimeout(()=>{if(live.state==="ok"||live.state==="review")setGuideState("seek");},900);
     }else{
-      live.fails++;live.cooldownUntil=Date.now()+900;
-      setLiveHint(live.fails>=3?"Can't read this one. Tap Capture, or type the name.":"Nothing readable yet");
-      if(live.fails>=3){live.lastHash=hash;live.lastGray=gray;live.armed=false;}
+      live.fails++;live.cooldownUntil=Date.now()+700;setGuideState("hold");
+      setLiveHint(live.fails>=3?"Can't read this one. Tap Capture, or type the name.":"Nothing readable yet, trying again");
+      if(live.fails>=3){live.lastHash=hash;live.lastGray=gray;live.armed=false;setGuideState("seek");}
     }
-  }catch(e){if(e&&e.message==="timeout"){setLiveHint("That took too long; trying again");live.cooldownUntil=Date.now()+1500;}else{ocrErr=(e&&e.message)||String(e);setLiveHint("Scanner error: "+ocrErr);live.cooldownUntil=Date.now()+2000;}}
+  }catch(e){setGuideState("hold");if(e&&e.message==="timeout"){setLiveHint("That took too long; trying again");live.cooldownUntil=Date.now()+1500;}else{ocrErr=(e&&e.message)||String(e);setLiveHint("Scanner error: "+ocrErr);live.cooldownUntil=Date.now()+2000;}}
   live.busy=false;
 }
 function setLiveHint(t){const h=$("#livehint");if(h)h.textContent=t;}
@@ -740,7 +754,7 @@ function commitScan(r,opts={}){
   toast(`${card.name} · ${r.print.set.toUpperCase()} ${r.print.num} · now ×${ownedOf(card.id)}`,()=>{const k=pk(card.id,r.print.set,r.print.num);const e=S.col[k];if(e){e.copies.pop();if(!e.copies.length)delete S.col[k];}const i=S.session.map(s=>s.id+s.set+s.num).lastIndexOf(card.id+r.print.set+r.print.num);if(i>-1)S.session.splice(i,1);save();render();});
 }
 function openMatchSheet(r,fromReview){
-  let pick={id:r.guess,set:r.print.set,num:r.print.num,conf:r.conf};
+  let pick={id:r.guess,set:r.print.set,num:r.print.num,conf:r.conf},showAll=false;
   const list=()=>[{id:r.guess,set:r.print.set,num:r.print.num,conf:r.conf},...(r.alts||[])];
   const draw=()=>{
     const pc=BY_ID[pick.id];
@@ -748,9 +762,10 @@ function openMatchSheet(r,fromReview){
     <div class="compare"><div class="col"><div class="crop">${r.img?`<img src="${r.img}" alt="">`:""}</div>Your scan</div><span class="mu" style="align-self:center">→</span><div class="col">${thumb(pc,"lg","",pc.prints.find(p=>p.set===pick.set&&p.num===pick.num))}Best match</div></div>
     <div style="text-align:center;margin-top:10px"><div style="font-weight:700;font-size:18px">${esc(pc.name)}</div><div class="meter" style="justify-content:center;margin-top:6px"><span>${pick.conf}%</span><div class="conf ${pick.conf>=THRESHOLD?"":pick.conf>=40?"wn":"bad"}" style="max-width:120px"><i style="width:${pick.conf}%"></i></div><span class="mono">${pick.set.toUpperCase()} ${esc(pick.num)}</span></div>${r.how?`<div class="mu" style="font-size:11px;margin-top:4px">printing from ${esc(r.how)}${r.signals?` · name ${Math.round((r.signals.name||0)*100)}%${r.signals.type!=null?" · type "+Math.round(r.signals.type*100)+"%":""}${r.signals.colour===false?" · frame colour disagrees":""}`:""}</div>`:""}</div>
     <div class="h">Candidates</div>
-    <div class="lst">${list().map((a,i)=>{const ac=BY_ID[a.id];if(!ac)return "";const on=a.id===pick.id&&a.set===pick.set&&a.num===pick.num;return `<button class="row ${on?"":"dim"}" data-alt="${i}" style="min-height:52px">${stripe(ac)}${thumb(ac,"sm","",ac.prints.find(p=>p.set===a.set&&p.num===a.num))}<div class="tx"><div class="n">${esc(ac.name)}</div><div class="d">${a.set.toUpperCase()} ${esc(a.num)} · ${esc(setName(a.set))}</div></div><span class="q ${on?"own":""}">${a.conf}%</span></button>`;}).join("")}</div>
-    <div class="btnrow"><button class="btn ghost" id="typeit">Type the name</button><button class="btn pri" id="accept">Accept ${pick.set.toUpperCase()} ${esc(pick.num)}</button></div>
-    ${fromReview?'<button class="btn sm ghost" id="discard" style="width:100%;margin-top:8px">Discard · not adding this</button>':'<button class="btn sm ghost" id="later" style="width:100%;margin-top:8px">Decide later</button>'}`;
+    <div class="lst">${(()=>{const all=list();const pi=all.findIndex(a=>a.id===pick.id&&a.set===pick.set&&a.num===pick.num);const shown=showAll?all:all.filter((a,i)=>i<4||i===pi);return shown.map(a=>{const i=all.indexOf(a);const ac=BY_ID[a.id];if(!ac)return "";const on=i===pi;return `<button class="row ${on?"":"dim"}" data-alt="${i}" style="min-height:52px">${stripe(ac)}${thumb(ac,"sm","",ac.prints.find(p=>p.set===a.set&&p.num===a.num))}<div class="tx"><div class="n">${esc(ac.name)}</div><div class="d">${a.set.toUpperCase()} ${esc(a.num)} · ${esc(setName(a.set))}</div></div><span class="q ${on?"own":""}">${a.conf}%</span></button>`;}).join("")+(all.length>shown.length?`<button class="row" id="morealts" style="min-height:44px;justify-content:center"><span class="mu" style="font-size:12.5px">${all.length-shown.length} more printing${all.length-shown.length>1?"s":""}</span></button>`:"");})()}</div>
+    <div class="stick"><div class="btnrow" style="margin-top:0"><button class="btn ghost" id="typeit">Type the name</button><button class="btn pri" id="accept">Accept ${pick.set.toUpperCase()} ${esc(pick.num)}</button></div>
+    ${fromReview?'<button class="btn sm ghost" id="discard" style="width:100%;margin-top:8px">Discard · not adding this</button>':'<button class="btn sm ghost" id="later" style="width:100%;margin-top:8px">Decide later</button>'}</div>`;
+    const ma=$("#morealts");if(ma)ma.onclick=()=>{showAll=true;draw();};
     $("#sheet").querySelectorAll("[data-alt]").forEach(b=>b.onclick=()=>{pick=list()[+b.dataset.alt];draw();});
     $("#accept").onclick=()=>{commitScan({guess:pick.id,print:{set:pick.set,num:pick.num},conf:pick.conf});if(fromReview)S.review=S.review.filter(x=>x.id!==r.id);save();closeSheet();render();};
     $("#typeit").onclick=()=>{closeSheet();openTypeSheet(name=>{const c=BY_LOWER[name.toLowerCase()];if(c)openAddSheetScan(c,r,fromReview);});};
@@ -1202,7 +1217,7 @@ function copyText(txt,msg){
 })();
 /* After a deploy the old cached app runs once while the new service worker installs.
    When the new one takes over, reload once so the new build is what you see. */
-const APP_VERSION="20261018f";
+const APP_VERSION="20261018g";
 let swReg=null;
 function setupUpdates(){
   if(!("serviceWorker" in navigator))return;
