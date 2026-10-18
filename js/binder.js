@@ -420,6 +420,13 @@ $("#overlay").onclick=e=>{if(e.target===$("#overlay"))closeSheet();};
    gives collector number and set code. Names are matched against the index with a
    trigram candidate pass and Dice similarity. */
 let ocrWorker=null,ocrState="idle",ocrMsg="",ocrErr="";
+/* A recognition can be abandoned (Cancel, Close, leaving the screen) or time out. Tesseract has no
+   abort, so the worker is terminated and recreated on the next scan; scanGen lets the abandoned
+   call's result fall on the floor. */
+let scanGen=0;
+function dropOCR(){if(ocrWorker){const w=ocrWorker;ocrWorker=null;ocrState="idle";try{w.terminate();}catch(e){}}}
+function cancelScan(){const was=scanning;scanGen++;if(was){scanning=false;ocrMsg="";dropOCR();}const b=$("#v-scan .busy");if(b)b.remove();live.busy=false;return was;}
+function recognizeTimed(src,opts,ms){const gen=scanGen;return new Promise((res,rej)=>{const t=setTimeout(()=>{if(gen===scanGen){dropOCR();}rej(new Error("timeout"));},ms);recognize(src,opts).then(v=>{clearTimeout(t);res(v);},e=>{clearTimeout(t);rej(e);});});}
 function ocrLog(m){if(m&&m.status){ocrMsg=m.status+(m.progress!=null?" "+Math.round(m.progress*100)+"%":"");const t=document.getElementById("ocrmsg");if(t)t.textContent=ocrMsg;}}
 async function getOCR(){
   if(ocrWorker)return ocrWorker;
@@ -566,7 +573,7 @@ async function openCamera(){
   rScan();
   if(camOn)getOCR();
 }
-function closeCamera(){stopLive();if(stream){stream.getTracks().forEach(t=>t.stop());stream=null;}camOn=false;}
+function closeCamera(){stopLive();cancelScan();if(stream){stream.getTracks().forEach(t=>t.stop());stream=null;}camOn=false;}
 
 /* ---- Continuous mode ----
    The camera stays open. Every ~120 ms the guide region is sampled at thumbnail size: motion
@@ -613,7 +620,7 @@ async function liveTick(){
   live.busy=true;setLiveHint("Reading…");
   try{
     const full=sampleGuide(v,g);
-    const r=await recognize(full,{fast:true});
+    const r=await recognizeTimed(full,{fast:true},15000);
     if(r&&r.guess){
       live.lastHash=hash;live.lastGray=gray;live.armed=false;live.fails=0;
       const img=await thumbData(full);
@@ -625,7 +632,7 @@ async function liveTick(){
       setLiveHint(live.fails>=3?"Can't read this one. Tap Capture, or type the name.":"Nothing readable yet");
       if(live.fails>=3){live.lastHash=hash;live.lastGray=gray;live.armed=false;}
     }
-  }catch(e){ocrErr=(e&&e.message)||String(e);setLiveHint("Scanner error: "+ocrErr);live.cooldownUntil=Date.now()+2000;}
+  }catch(e){if(e&&e.message==="timeout"){setLiveHint("That took too long; trying again");live.cooldownUntil=Date.now()+1500;}else{ocrErr=(e&&e.message)||String(e);setLiveHint("Scanner error: "+ocrErr);live.cooldownUntil=Date.now()+2000;}}
   live.busy=false;
 }
 function setLiveHint(t){const h=$("#livehint");if(h)h.textContent=t;}
@@ -642,7 +649,7 @@ function feedback(soft){try{if(navigator.vibrate)navigator.vibrate(soft?[20,40,2
 /* Update counters, tray and badge in place; a full rScan would recreate the video element. */
 function updateLiveUI(){
   const ses=S.session;const sub=$("#v-scan .top .s");if(sub)sub.innerHTML=`Session · ${ses.length} added${S.review.length?` · <span style="color:var(--wn)">${S.review.length} to review</span>`:""}`;
-  const es=$("#endses");if(es)es.disabled=!ses.length;
+  const es=$("#endses");if(es)es.disabled=!(ses.length||camOn||scanning);
   const sp=$("#sesprog");if(sp){const counts={};for(const s of ses)counts[s.set]=(counts[s.set]||0)+1;const top=Object.entries(counts).sort((a,b)=>b[1]-a[1])[0];if(top){const st=allSetStats().find(x=>x.code===top[0]);sp.hidden=!st;if(st)sp.innerHTML=`<button class="row" data-setprog="${st.code}" style="min-height:44px"><div class="tx"><div class="n">${esc(st.name)}</div><div class="bar" style="margin-top:5px"><i style="width:${100*st.owned/st.base}%"></i></div></div><span class="q own">${st.owned} / ${st.base}</span></button>`;const b=sp.querySelector("[data-setprog]");if(b)b.onclick=()=>go("checklist",{kind:"set",code:b.dataset.setprog});}else sp.hidden=true;}
   const tray=$("#livetray");if(tray){tray.innerHTML=[...ses].reverse().slice(0,12).map(s=>{const card=BY_ID[s.id];const p=card.prints.find(x=>x.set===s.set&&x.num===s.num);return `<button data-card="${esc(card.id)}" title="${esc(card.name)}">${thumb(card,"md","",p)}</button>`;}).join("")||'<div class="empty" style="padding:12px">Pan over your cards; each one lands here as it is read.</div>';tray.querySelectorAll("[data-card]").forEach(b=>b.onclick=()=>go("card",{id:b.dataset.card}));}
   updateBadges();
@@ -668,7 +675,7 @@ function rScan(){
       <div class="livebanner" id="livebanner" hidden></div>
       <div class="z mono" id="ocrmsg" style="font-size:11px;text-align:center">${scanning?esc(ocrMsg):ocrState==="loading"?"Starting OCR…":""}</div>
       <div class="livehint" id="livehint">${ocrState==="ready"?"":"Starting the scanner…"}</div>
-      ${scanning?'<div class="busy">Reading…</div>':""}
+      ${scanning?'<div class="busy"><span>Reading…</span><button class="btn sm" id="scancancel">Cancel</button></div>':""}
       <div class="ctl"><button class="btn ${live.on?"pri":""}" id="liveauto" aria-pressed="${live.on}">${live.on?"Auto: on":"Auto: off"}</button><button class="btn" id="capture" ${scanning?"disabled":""}>Capture</button><button class="btn" id="livesound" aria-pressed="${live.sound}" title="Sound">${live.sound?"Sound on":"Muted"}</button><button class="btn" id="camoff">Close</button></div></div>
       <div class="h">This session</div><div id="sesprog" hidden></div><div class="tray" id="livetray"></div>`
   :`<div class="cam">${lastImg?`<img src="${lastImg}" alt="">`:""}<div class="guide" id="guide"></div>
@@ -676,10 +683,10 @@ function rScan(){
     <div class="z mono" id="ocrmsg" style="font-size:11px;color:var(--mu);min-height:14px">${scanning?esc(ocrMsg):ocrState==="ready"?"OCR ready":""}</div>
     ${camErr?`<div class="note z" style="margin:0;color:var(--wn)">${esc(camErr)}</div>`:""}
     <div class="note z" style="margin:0">Card upright inside the frame, title band sharp. At or above ${THRESHOLD}% it goes straight in; below that you confirm.</div>
-    <button class="demo z" id="simulate" ${scanning?"disabled":""}>Try a demo scan</button>
+    ${scanning?'<button class="demo z" id="scancancel">Cancel</button>':'<button class="demo z" id="simulate">Try a demo scan</button>'}
   </div>`;
   el.innerHTML=`
-  <div class="top"><div><h1>Scan</h1><div class="s">Session · ${ses.length} added${S.review.length?` · <span style="color:var(--wn)">${S.review.length} to review</span>`:""}</div></div><button class="btn sm" id="endses" ${ses.length?"":"disabled"}>End session</button></div>
+  <div class="top"><div><h1>Scan</h1><div class="s">Session · ${ses.length} added${S.review.length?` · <span style="color:var(--wn)">${S.review.length} to review</span>`:""}</div></div><button class="btn sm" id="endses" ${ses.length||camOn||scanning?"":"disabled"}>End session</button></div>
   ${camBox}
   ${engine}
   ${camOn?"":'<div class="h">Tray</div>'}
@@ -696,19 +703,27 @@ function rScan(){
   const ls=$("#livesound");if(ls)ls.onclick=()=>{live.sound=!live.sound;S.prefs=S.prefs||{};S.prefs.sound=live.sound;save();rScan();};
   const vid=$("#video");if(vid&&stream){vid.srcObject=stream;vid.play().catch(()=>{});if(live.on){getOCR().then(()=>{setLiveHint("");startLive();});}}
   if(camOn)updateLiveUI();
-  $("#endses").onclick=()=>{const n=S.session.length;S.session=[];save();rScan();toast(`Session closed · ${n} added`);};
+  $("#endses").onclick=()=>{const n=S.session.length;closeCamera();S.session=[];save();rScan();toast(n?`Session closed · ${n} added`:"Session closed");};
+  const sc=$("#scancancel");if(sc)sc.onclick=()=>{cancelScan();if(camOn)updateLiveUI();else rScan();toast("Scan cancelled");};
   el.querySelectorAll("[data-card]").forEach(b=>b.onclick=()=>go("card",{id:b.dataset.card}));
   const tr=$("#torev");if(tr)tr.onclick=()=>go("review");
 }
 async function doScan(file){
-  scanning=true;ocrMsg=file?"Preparing image…":"";
+  if(scanning)return;
+  const gen=++scanGen;scanning=true;ocrMsg=file?"Preparing image…":"";
   lastImg=file?await thumbData(file):null;
-  if(camOn){const c=$("#v-scan .cam");if(c&&!$("#v-scan .busy")){const b=document.createElement("div");b.className="busy";b.textContent="Reading…";c.appendChild(b);}}else rScan();
+  if(gen!==scanGen)return;
+  if(camOn){const c=$("#v-scan .cam");if(c&&!$("#v-scan .busy")){const b=document.createElement("div");b.className="busy";b.innerHTML='<span>Reading…</span><button class="btn sm" id="scancancel">Cancel</button>';c.appendChild(b);$("#scancancel").onclick=()=>{cancelScan();updateLiveUI();toast("Scan cancelled");};}}else rScan();
   let r=null;
   try{
-    if(file){r=await recognize(file);if(r===null)r=await recognizeStub(file);}
+    if(file){r=await recognizeTimed(file,{},30000);if(r===null)r=await recognizeStub(file);}
     else r=await recognizeStub(null);
-  }catch(e){ocrErr=(e&&e.message)||String(e);ocrState="failed";r=await recognizeStub(file);}
+  }catch(e){
+    if(gen!==scanGen)return;
+    if(e&&e.message==="timeout"){scanning=false;if(camOn){const b=$("#v-scan .busy");if(b)b.remove();updateLiveUI();}else rScan();toast("That took too long. Try again with the card closer and in better light.");return;}
+    ocrErr=(e&&e.message)||String(e);ocrState="failed";r=await recognizeStub(file);
+  }
+  if(gen!==scanGen)return;
   scanning=false;
   const refresh=()=>{if(camOn){const b=$("#v-scan .busy");if(b)b.remove();updateLiveUI();}else rScan();};
   if(!r.guess){refresh();toast("Couldn't read a name. Try closer, or type it.");openTypeSheet(name=>{const c=BY_LOWER[name.toLowerCase()];if(c)openAddSheetScan(c,{conf:0,img:lastImg},false);});return;}
@@ -1185,7 +1200,7 @@ function copyText(txt,msg){
 })();
 /* After a deploy the old cached app runs once while the new service worker installs.
    When the new one takes over, reload once so the new build is what you see. */
-const APP_VERSION="20261018d";
+const APP_VERSION="20261018e";
 let swReg=null;
 function setupUpdates(){
   if(!("serviceWorker" in navigator))return;
