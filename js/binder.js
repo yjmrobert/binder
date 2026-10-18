@@ -1178,7 +1178,7 @@ function copyText(txt,msg){
 })();
 /* After a deploy the old cached app runs once while the new service worker installs.
    When the new one takes over, reload once so the new build is what you see. */
-const APP_VERSION="20261018b";
+const APP_VERSION="20261018c";
 let swReg=null;
 function setupUpdates(){
   if(!("serviceWorker" in navigator))return;

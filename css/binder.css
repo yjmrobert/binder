@@ -195,7 +195,7 @@ input[type=file]{position:absolute;width:1px;height:1px;opacity:0;pointer-events
 .trayitem{display:flex;flex-direction:column;align-items:center;gap:6px;padding:12px 4px 10px;border-radius:12px;border:1px solid var(--ln);background:var(--sf2);font-size:12px;font-weight:600;color:var(--fg);position:relative;min-height:72px}
 .trayitem svg{width:24px;height:24px}
 .trayitem .badge{position:absolute;top:6px;right:8px;background:var(--wn);color:var(--wn-ink);font-size:11px;font-weight:700;border-radius:999px;padding:0 5px;line-height:16px;min-width:16px;text-align:center}
-.iconbtn{width:40px;height:40px;border-radius:9px;border:1px solid var(--ln);background:var(--sf);color:var(--fg);font-size:15px;flex:0 0 auto}
+.iconbtn{width:40px;height:40px;border-radius:9px;border:1px solid var(--ln);background:var(--sf);color:var(--fg);font-size:16px;line-height:1;flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;text-align:center;padding:0}
 .iconbtn[disabled]{opacity:.35}
 .row>svg{flex:0 0 auto;color:var(--mu)}
 .arch{display:flex;flex-direction:column;gap:18px;max-width:420px;margin:0 auto;padding-block:24px}
