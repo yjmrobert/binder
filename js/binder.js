@@ -750,11 +750,12 @@ function openMatchSheet(r,fromReview){
     <div class="h">Candidates</div>
     <div class="lst">${list().map((a,i)=>{const ac=BY_ID[a.id];if(!ac)return "";const on=a.id===pick.id&&a.set===pick.set&&a.num===pick.num;return `<button class="row ${on?"":"dim"}" data-alt="${i}" style="min-height:52px">${stripe(ac)}${thumb(ac,"sm","",ac.prints.find(p=>p.set===a.set&&p.num===a.num))}<div class="tx"><div class="n">${esc(ac.name)}</div><div class="d">${a.set.toUpperCase()} ${esc(a.num)} · ${esc(setName(a.set))}</div></div><span class="q ${on?"own":""}">${a.conf}%</span></button>`;}).join("")}</div>
     <div class="btnrow"><button class="btn ghost" id="typeit">Type the name</button><button class="btn pri" id="accept">Accept ${pick.set.toUpperCase()} ${esc(pick.num)}</button></div>
-    ${fromReview?"":'<button class="btn sm ghost" id="later" style="width:100%;margin-top:8px">Decide later</button>'}`;
+    ${fromReview?'<button class="btn sm ghost" id="discard" style="width:100%;margin-top:8px">Discard · not adding this</button>':'<button class="btn sm ghost" id="later" style="width:100%;margin-top:8px">Decide later</button>'}`;
     $("#sheet").querySelectorAll("[data-alt]").forEach(b=>b.onclick=()=>{pick=list()[+b.dataset.alt];draw();});
     $("#accept").onclick=()=>{commitScan({guess:pick.id,print:{set:pick.set,num:pick.num},conf:pick.conf});if(fromReview)S.review=S.review.filter(x=>x.id!==r.id);save();closeSheet();render();};
     $("#typeit").onclick=()=>{closeSheet();openTypeSheet(name=>{const c=BY_LOWER[name.toLowerCase()];if(c)openAddSheetScan(c,r,fromReview);});};
     const l=$("#later");if(l)l.onclick=()=>{S.review.push({id:"r"+Date.now(),guess:r.guess,print:r.print,conf:r.conf,alts:r.alts||[],img:r.img,at:r.at});save();closeSheet();render();toast("Kept in review");};
+    const d=$("#discard");if(d)d.onclick=()=>{const item=S.review.find(x=>x.id===r.id);S.review=S.review.filter(x=>x.id!==r.id);save();closeSheet();render();toast("Discarded",item?()=>{S.review.push(item);save();render();}:undefined);};
   };
   draw();openSheet();
 }
@@ -797,11 +798,12 @@ function rReview(){
   el.innerHTML=`<div class="top"><div><h1>Review</h1><div class="s">${items.length} uncertain · lowest first</div></div>${pins().includes("review")?"":'<button class="btn sm" id="bk">Scan</button>'}</div>
   ${items.length?`<div class="lst">${items.map(r=>{const card=BY_ID[r.guess];return `<button class="row" data-rv="${r.id}" style="min-height:60px"><div class="crop" style="width:34px;height:48px;border-radius:4px">${r.img?`<img src="${r.img}" alt="">`:""}</div><div class="tx"><div class="n">${esc(card.name)}?</div><div class="meter" style="margin-top:4px"><span>${r.conf}%</span><div class="conf ${r.conf>=40?"wn":"bad"}"><i style="width:${r.conf}%"></i></div><span class="mono">${r.print.set.toUpperCase()} ${esc(r.print.num)}</span></div></div><span class="mu">›</span></button>`;}).join("")}</div>
   <div class="note">Most of these are the right name with an uncertain printing; the sheet groups same-name candidates so set is the only decision.</div>
-  <button class="btn" id="acceptall" style="margin-top:12px">Accept all ≥ 70%</button>`
+  <div class="btnrow"><button class="btn ghost" id="clearall">Clear all</button><button class="btn" id="acceptall" ${items.some(r=>r.conf>=70)?"":"disabled"}>Accept all ≥ 70%${items.some(r=>r.conf>=70)?` · ${items.filter(r=>r.conf>=70).length}`:""}</button></div>`
   :`<div class="empty">Nothing to review. Scans below ${THRESHOLD}% confidence land here.</div>`}`;
   const bk=$("#bk");if(bk)bk.onclick=()=>go("scan");
   el.querySelectorAll("[data-rv]").forEach(b=>b.onclick=()=>{const r=S.review.find(x=>x.id===b.dataset.rv);openMatchSheet(r,true);});
   const aa=$("#acceptall");if(aa)aa.onclick=()=>{const ok=S.review.filter(r=>r.conf>=70);ok.forEach(r=>commitScan({guess:r.guess,print:r.print,conf:r.conf}));S.review=S.review.filter(r=>r.conf<70);save();render();toast(`Accepted ${ok.length}`);};
+  const ca=$("#clearall");if(ca)ca.onclick=()=>{const gone=S.review.slice();S.review=[];save();render();toast(`Cleared ${gone.length} · nothing was added`,()=>{S.review=gone.concat(S.review);save();render();});};
 }
 
 /* ========================= BINDER ========================= */
@@ -1200,7 +1202,7 @@ function copyText(txt,msg){
 })();
 /* After a deploy the old cached app runs once while the new service worker installs.
    When the new one takes over, reload once so the new build is what you see. */
-const APP_VERSION="20261018e";
+const APP_VERSION="20261018f";
 let swReg=null;
 function setupUpdates(){
   if(!("serviceWorker" in navigator))return;
