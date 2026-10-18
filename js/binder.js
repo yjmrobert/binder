@@ -427,7 +427,7 @@ let scanGen=0;
 function dropOCR(){if(ocrWorker){const w=ocrWorker;ocrWorker=null;ocrState="idle";try{w.terminate();}catch(e){}}}
 function cancelScan(){const was=scanning;scanGen++;if(was){scanning=false;ocrMsg="";dropOCR();}const b=$("#v-scan .busy");if(b)b.remove();live.busy=false;return was;}
 function recognizeTimed(src,opts,ms){const gen=scanGen;return new Promise((res,rej)=>{const t=setTimeout(()=>{if(gen===scanGen){dropOCR();}rej(new Error("timeout"));},ms);recognize(src,opts).then(v=>{clearTimeout(t);res(v);},e=>{clearTimeout(t);rej(e);});});}
-function ocrLog(m){if(m&&m.status){ocrMsg=m.status+(m.progress!=null?" "+Math.round(m.progress*100)+"%":"");const t=document.getElementById("ocrmsg");if(t)t.textContent=ocrMsg;}}
+function ocrLog(m){if(live&&live.busy&&!scanning)return;if(m&&m.status){ocrMsg=m.status+(m.progress!=null?" "+Math.round(m.progress*100)+"%":"");const t=document.getElementById("ocrmsg");if(t)t.textContent=ocrMsg;}}
 async function getOCR(){
   if(ocrWorker)return ocrWorker;
   if(ocrState==="failed")return null;
@@ -630,21 +630,27 @@ async function liveTick(){
   // phone whose preview never reaches the old absolute bar still gets to try; OCR is the real test.
   live.sharpHist.push(q.sharp);if(live.sharpHist.length>25)live.sharpHist.shift();
   const peak=Math.max(...live.sharpHist);const need=Math.min(35,Math.max(12,peak*.5));
-  const now=Date.now();
-  if(q.sharp<8){live.presentSince=0;setGuideState("seek");setLiveHint("Looking for a card…"+diag(motion,q));return;}
+  const now=Date.now();const cg=cardGate(mid);
+  if(q.sharp<8||!cg.ok){live.presentSince=0;setGuideState("seek");setLiveHint((q.sharp<8?"Looking for a card…":"Line the card up in the frame")+diag(motion,q,cg));return;}
   if(!live.presentSince)live.presentSince=now;
-  // Fallback: a card has been in the frame for over a second but the gates never agreed; try anyway.
-  const overdue=now-live.presentSince>1200;
+  // Fallback: a card has been lined up for over 1.5 s but the gates never agreed; try anyway.
+  const overdue=now-live.presentSince>1500;
   if(!overdue){
-    if(live.still<3){setGuideState("hold");setLiveHint("Hold still…"+diag(motion,q));return;}
-    if(q.sharp<need){setGuideState("hold");setLiveHint("Hold still, a little closer"+diag(motion,q));return;}
-    if(q.glare>.12){setGuideState("hold");setLiveHint("Glare on the card, tilt it"+diag(motion,q));return;}
+    if(live.still<3){setGuideState("hold");setLiveHint("Hold still…"+diag(motion,q,cg));return;}
+    if(q.sharp<need){setGuideState("hold");setLiveHint("Hold still, a little closer"+diag(motion,q,cg));return;}
+    if(q.glare>.12){setGuideState("hold");setLiveHint("Glare on the card, tilt it"+diag(motion,q,cg));return;}
   }
   live.presentSince=0;
   live.busy=true;setGuideState("read");setLiveHint("Reading…");
   try{
     const full=sampleGuide(v,g);
     const r=await recognizeTimed(full,{fast:true},15000);
+    // Auto mode adds without asking, so it needs corroboration: a strong name alone, or a plausible
+    // name backed by an agreeing type line or a confirmed collector line. Garbage OCR from a gap
+    // between cards can fuzzy-match some name; it cannot also match a type line or a set code.
+    const s=r&&r.signals||{};
+    const solid=r&&r.guess&&((s.name||0)>=.85||((s.name||0)>=.6&&((s.type||0)>=.5||(s.print||0)>=.85)));
+    if(r&&r.guess&&!solid)r.guess=null;
     if(r&&r.guess){
       live.lastHash=hash;live.lastGray=gray;live.armed=false;live.fails=0;
       const img=await thumbData(full);
@@ -661,7 +667,20 @@ async function liveTick(){
   live.busy=false;
 }
 function setLiveHint(t){const h=$("#livehint");if(h)h.textContent=t;}
-function diag(motion,q){if(!(S.prefs&&S.prefs.diag))return "";return ` · m ${motion.toFixed(1)} s ${Math.round(q.sharp)} still ${live.still}`;}
+/* Cheap "is a card lined up" test on the guide sample: a card's top edge and title bar put a strong
+   horizontal edge in the top 16% of the frame (about 9x the median row on phone previews); a
+   tablecloth, a gap between cards, or a frame that has slid down the card does not (<1x). */
+function cardGate(cv){
+  const w=cv.width,h=cv.height;const d=cv.getContext("2d").getImageData(0,0,w,h).data;
+  const g=new Float32Array(w*h);for(let i=0,j=0;i<d.length;i+=4,j++)g[j]=d[i]*.3+d[i+1]*.59+d[i+2]*.11;
+  const rows=new Float32Array(h);for(let y=1;y<h-1;y++){let s=0;for(let x=1;x<w-1;x++){const i=y*w+x;s+=Math.abs(g[i+w]-g[i-w]);}rows[y]=s/(w-2);}
+  const sorted=Array.from(rows.subarray(1,h-1)).sort((a,b)=>a-b);const med=sorted[sorted.length>>1]||0;
+  let top=0;for(let y=1;y<Math.round(h*.16);y++)top=Math.max(top,rows[y]);
+  let mid=0;for(let y=Math.round(h*.5);y<Math.round(h*.68);y++)mid=Math.max(mid,rows[y]);
+  const ok=top>=20&&top>=3*med;
+  return {ok,top:Math.round(top),mid:Math.round(mid),med:+med.toFixed(1)};
+}
+function diag(motion,q,cg){if(!(S.prefs&&S.prefs.diag))return "";return ` · m ${motion.toFixed(1)} s ${Math.round(q.sharp)} still ${live.still}${cg?` edge ${cg.top}/${cg.med}`:""}`;}
 function liveBanner(r,kind){const b=$("#livebanner");if(!b)return;const card=BY_ID[r.guess];const p=card.prints.find(x=>x.set===r.print.set&&x.num===r.print.num);
   b.className="livebanner "+kind;b.innerHTML=`${thumb(card,"sm","",p)}<div class="tx"><div class="n">${esc(card.name)}${kind==="review"?"?":""}</div><div class="d">${pr(r.print)} · ${r.conf}%${kind==="ok"?` · now ×${ownedOf(card.id)}`:" · sent to review"}</div></div>${kind==="ok"?'<button class="btn sm" id="liveundo">Undo</button>':'<button class="btn sm" id="livefix">Fix</button>'}`;
   b.hidden=false;clearTimeout(b._t);b._t=setTimeout(()=>{b.hidden=true;},kind==="ok"?3500:6000);
@@ -1231,7 +1250,7 @@ function copyText(txt,msg){
 })();
 /* After a deploy the old cached app runs once while the new service worker installs.
    When the new one takes over, reload once so the new build is what you see. */
-const APP_VERSION="20261018h";
+const APP_VERSION="20261018i";
 let swReg=null;
 function setupUpdates(){
   if(!("serviceWorker" in navigator))return;
