@@ -57,7 +57,7 @@ function seed(){
     session:[],prefs:{}};
 }
 function pk(id,set,num){return id+"|"+set+"|"+num;}
-function addCopy(col,id,set,num,copy){const k=pk(id,set,num);(col[k]=col[k]||{id,set,num,copies:[]}).copies.push(copy);}
+function addCopy(col,id,set,num,copy){const k=pk(id,set,num);(col[k]=col[k]||{id,set,num,copies:[]}).copies.push(copy);if(typeof S!=="undefined"&&S&&col===S.col){const c=BY_ID[id];const p=c&&c.prints.find(x=>x.set===set&&x.num===num);if(p&&typeof wantPrices==="function")setTimeout(()=>wantPrices([p]),0);}}
 function empty(){return {col:{},review:[],decks:[],session:[],prefs:{}};}
 function load(){try{const raw=localStorage.getItem(KEY);if(raw){S=JSON.parse(raw);for(const k of Object.keys(S.col))if(!BY_ID[S.col[k].id])delete S.col[k];S.review=S.review.filter(r=>BY_ID[r.guess]);return;}}catch(e){}S=empty();save();}
 function save(){try{localStorage.setItem(KEY,JSON.stringify(S));}catch(e){}}
@@ -88,6 +88,59 @@ function pr(p){return p.set.toUpperCase()+" "+p.num;}
 function ownedPrints(id){return Object.values(S.col).filter(e=>e.id===id).sort((a,b)=>b.copies.length-a.copies.length);}
 function toast(msg,undo){const t=$("#toast");t.innerHTML=esc(msg)+(undo?'<button id="undo">Undo</button>':"");t.classList.add("on");clearTimeout(t._t);t._t=setTimeout(()=>t.classList.remove("on"),undo?5000:2400);if(undo)$("#undo").onclick=()=>{undo();t.classList.remove("on");};}
 function today(){return new Date().toISOString().slice(0,10);}
+
+/* ========================= PRICES =========================
+   Scryfall's collection endpoint returns up to 75 cards per POST with TCGplayer (usd) and
+   Cardmarket (eur) prices. Binder asks only for printings it needs (what you own, the card you
+   are looking at), keeps them for a day in local storage, and totals the collection once a day. */
+const PRICE_TTL=24*3600*1000,PRICE_BATCH=75;
+let priceQueue=new Set(),priceBusy=false,priceErr="";
+function currency(){return (S.prefs&&S.prefs.currency)||"usd";}
+function dashed(h){return h.slice(0,8)+"-"+h.slice(8,12)+"-"+h.slice(12,16)+"-"+h.slice(16,20)+"-"+h.slice(20);}
+function priceOf(p,foil){const r=S.prices&&S.prices[p.sid];if(!r)return null;const c=currency();const v=foil?(r[c+"_foil"]!=null?r[c+"_foil"]:r[c+"_etched"]!=null?r[c+"_etched"]:r[c]):(r[c]!=null?r[c]:r[c+"_foil"]);return v==null?null:+v;}
+function fmt(v){if(v==null)return "—";const c=currency();return (c==="eur"?"€":"$")+(v>=100?v.toFixed(0):v.toFixed(2));}
+function entryValue(e){const card=BY_ID[e.id];const p=card&&card.prints.find(x=>x.set===e.set&&x.num===e.num);if(!p)return null;let t=0,known=0;for(const cp of e.copies){const v=priceOf(p,cp.foil);if(v!=null){t+=v;known++;}}return {total:t,known,of:e.copies.length};}
+function collectionValue(){let t=0,known=0,of=0;for(const e of Object.values(S.col)){const v=entryValue(e);if(!v)continue;t+=v.total;known+=v.known;of+=v.of;}return {total:t,known,of};}
+function stale(sid){const r=S.prices&&S.prices[sid];return !r||(Date.now()-r.at)>PRICE_TTL;}
+function wantPrices(prints){if(!prints)return;for(const p of prints){if(p&&p.sid&&stale(p.sid))priceQueue.add(p.sid);}pumpPrices();}
+function wantOwnedPrices(){const seen=new Set();for(const e of Object.values(S.col)){const card=BY_ID[e.id];const p=card&&card.prints.find(x=>x.set===e.set&&x.num===e.num);if(p&&p.sid&&!seen.has(p.sid)){seen.add(p.sid);if(stale(p.sid))priceQueue.add(p.sid);}}pumpPrices();}
+async function pumpPrices(){
+  if(priceBusy||!priceQueue.size||(typeof navigator!=="undefined"&&navigator.onLine===false))return;
+  priceBusy=true;
+  try{
+    while(priceQueue.size){
+      const chunk=[...priceQueue].slice(0,PRICE_BATCH);chunk.forEach(x=>priceQueue.delete(x));
+      const res=await fetch("https://api.scryfall.com/cards/collection",{method:"POST",headers:{"Content-Type":"application/json","Accept":"application/json"},body:JSON.stringify({identifiers:chunk.map(id=>({id:dashed(id)}))})});
+      if(!res.ok){priceErr="Scryfall answered "+res.status;break;}
+      const j=await res.json();S.prices=S.prices||{};const now=Date.now();
+      for(const c of (j.data||[])){const pr=c.prices||{};S.prices[c.id.replace(/-/g,"")]={usd:pr.usd,usd_foil:pr.usd_foil,usd_etched:pr.usd_etched,eur:pr.eur,eur_foil:pr.eur_foil,at:now};}
+      for(const nf of (j.not_found||[])){const id=(nf.id||"").replace(/-/g,"");if(id)S.prices[id]={at:now};}
+      priceErr="";save();snapshotValue();rerender();
+      if(priceQueue.size)await new Promise(r=>setTimeout(r,150));
+    }
+  }catch(e){priceErr=(e&&e.message)||String(e);}
+  priceBusy=false;
+}
+function snapshotValue(){
+  const v=collectionValue();if(!v.of||v.known<v.of)return;
+  S.hist=S.hist||[];const d=today();const last=S.hist[S.hist.length-1];
+  const rec={d,v:+v.total.toFixed(2),n:v.of,c:currency()};
+  if(last&&last.d===d)S.hist[S.hist.length-1]=rec;else S.hist.push(rec);
+  if(S.hist.length>730)S.hist=S.hist.slice(-730);save();
+}
+function valueChange(){const h=S.hist||[];if(h.length<2)return "first snapshot";const last=h[h.length-1];const weekAgo=[...h].reverse().find(x=>(Date.parse(last.d)-Date.parse(x.d))>=6*864e5)||h[0];const d=last.v-weekAgo.v;const days=Math.round((Date.parse(last.d)-Date.parse(weekAgo.d))/864e5);return `${d>=0?"+":"−"}${fmt(Math.abs(d)).replace(/^[$€]/,m=>m)} over ${days} day${days===1?"":"s"}`;}
+function sparkline(h){
+  const pts=h.slice(-90);const vs=pts.map(x=>x.v);const lo=Math.min(...vs),hi=Math.max(...vs);const W=320,H=56,pad=4;
+  const X=i=>pad+(pts.length===1?0:i*(W-2*pad)/(pts.length-1)),Y=v=>hi===lo?H/2:H-pad-(v-lo)*(H-2*pad)/(hi-lo);
+  const d=pts.map((x,i)=>(i?"L":"M")+X(i).toFixed(1)+" "+Y(x.v).toFixed(1)).join(" ");
+  const last=pts[pts.length-1],first=pts[0];
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%" height="56" role="img" aria-label="Collection value, ${first.d} to ${last.d}" style="margin-top:8px;display:block"><path d="${d} L${X(pts.length-1).toFixed(1)} ${H} L${X(0)} ${H} Z" fill="var(--acs)" opacity=".5"/><path d="${d}" fill="none" stroke="var(--fg)" stroke-width="1.5"/><circle cx="${X(pts.length-1).toFixed(1)}" cy="${Y(last.v).toFixed(1)}" r="3" fill="var(--fg)"/></svg><div style="display:flex;justify-content:space-between" class="mu"><small>${first.d}</small><small>${fmt(lo)} – ${fmt(hi)}</small><small>${last.d}</small></div>`;
+}
+function pricesAsOf(){let newest=0;for(const k in (S.prices||{})){const a=S.prices[k].at;if(a>newest)newest=a;}return newest;}
+function ago(ts){if(!ts)return "never";const m=Math.round((Date.now()-ts)/60000);if(m<2)return "just now";if(m<60)return m+" min ago";const h=Math.round(m/60);if(h<48)return h+" h ago";return Math.round(h/24)+" days ago";}
+
+/* Re-render the current screen without losing scroll position or a focused input. */
+function rerender(){const a=document.activeElement;if(a&&/^(input|textarea)$/i.test(a.tagName))return;if($("#overlay").classList.contains("on"))return;const el=$("#v-"+view);const st=el?el.scrollTop:0;render();if(el)el.scrollTop=st;}
 
 /* ========================= NAV ========================= */
 let view="search",stack=[],curArg=null;
@@ -172,7 +225,7 @@ function rSearch(){
     ${res.length>showN?'<button class="btn ghost" id="moreres" style="margin-top:10px">Show more</button>':""}`
   :`<div class="h">Syntax</div><div class="sect mono" style="font-size:12px;line-height:1.8"><span class="mu">t:</span>type &nbsp;<span class="mu">c:</span>colour &nbsp;<span class="mu">e:</span>set &nbsp;<span class="mu">o:</span>oracle<br><span class="mu">mv</span>&lt;=2 &nbsp;<span class="mu">owned</span> &nbsp;<span class="mu">-owned</span> &nbsp;<span class="mu">foil</span></div>
     <div class="h">${recents().length?"Recent":"Try"}</div><div class="lst">${(recents().length?recents():TRY).map(r=>`<button class="row recent" data-q="${esc(r)}"><div class="tx"><div class="n mono" style="font-weight:500">${esc(r)}</div></div><span class="mu">›</span></button>`).join("")}</div>
-    <div class="h">Collection</div><div class="sect"><div style="display:flex;justify-content:space-between;align-items:baseline"><span style="font-size:22px;font-weight:700" class="mono">${totalOwned()}</span><span class="mu" style="font-size:12px">cards · ${Object.keys(S.col).length} printings · index ${INDEX.length.toLocaleString()} cards</span></div>${totalOwned()?"":'<div class="note">Nothing here yet. Scan a card, add one by name, or load the demo collection under More.</div><div class="btnrow" style="margin-top:10px"><button class="btn" id="goscan">Scan a card</button><button class="btn" id="golDemo">Load demo</button></div>'}</div>`}`;
+    <div class="h">Collection</div><div class="sect"><div style="display:flex;justify-content:space-between;align-items:baseline"><span style="font-size:22px;font-weight:700" class="mono">${totalOwned()}</span><span class="mu" style="font-size:12px">cards · ${Object.keys(S.col).length} printings · index ${INDEX.length.toLocaleString()} cards</span></div>${totalOwned()?(()=>{const v=collectionValue();return v.known?`<div style="display:flex;justify-content:space-between;align-items:baseline;margin-top:8px"><span style="font-size:22px;font-weight:700" class="mono">${fmt(v.total)}</span><span class="mu" style="font-size:12px">${v.known<v.of?`${v.known} of ${v.of} copies priced`:"collection value"} · ${valueChange()}</span></div>`:`<div class="note">${navigator.onLine===false?"Prices update when you're back online.":priceErr?"Prices: "+esc(priceErr):"Fetching prices…"}</div>`;})():'<div class="note">Nothing here yet. Scan a card, add one by name, or load the demo collection under More.</div><div class="btnrow" style="margin-top:10px"><button class="btn" id="goscan">Scan a card</button><button class="btn" id="golDemo">Load demo</button></div>'}</div>`}`;
   const inp=$("#qin");
   inp.oninput=()=>{q=inp.value;showN=100;const sel=inp.selectionStart;rSearch();const n=$("#qin");n.focus();n.setSelectionRange(sel,sel);};
   inp.onchange=()=>remember(inp.value);
@@ -188,7 +241,8 @@ function rSearch(){
 function rowCard(card){
   const own=ownedOf(card.id);const ops=own?ownedPrints(card.id):[];
   const where=own?pr(ops[0])+(ops.length>1?" +"+(ops.length-1)+" more":""):pr(defaultPrint(card))+(card.prints.length>1?" · "+card.prints.length+" printings":"");
-  return `<button class="row ${own?"":"dim"}" data-card="${esc(card.id)}">${stripe(card)}${thumb(card,"sm")}<div class="tx"><div class="n">${esc(card.name)}</div><div class="d">${pips(card.cost)}<span>${esc(card.types.join(" "))} · ${where}</span></div></div><span class="q ${own?"own":""}">${own?"×"+own:"—"}</span></button>`;
+  const sp=own?card.prints.find(x=>x.set===ops[0].set&&x.num===ops[0].num):null;const pv=sp?priceOf(sp,ops[0].copies.some(c=>c.foil)&&ops[0].copies.every(c=>c.foil)):null;
+  return `<button class="row ${own?"":"dim"}" data-card="${esc(card.id)}">${stripe(card)}${thumb(card,"sm")}<div class="tx"><div class="n">${esc(card.name)}</div><div class="d">${pips(card.cost)}<span>${esc(card.types.join(" "))} · ${where}</span></div></div><span class="q ${own?"own":""}">${own?"×"+own:"—"}${pv!=null?`<small>${fmt(pv)}</small>`:""}</span></button>`;
 }
 
 /* ========================= CARD ========================= */
@@ -208,17 +262,18 @@ function rCard(){
       <div style="font-weight:700;font-size:19px;line-height:1.15;text-wrap:balance">${esc(card.name)}</div>
       <div class="mu" style="font-size:13px;margin:4px 0 10px;display:flex;align-items:center;gap:6px;flex-wrap:wrap">${pips(card.cost)} <span>${esc(card.type)}</span>${card.pt?`<span class="mono">${esc(card.pt)}</span>`:""}</div>
       <div style="font-size:30px;font-weight:700;line-height:1" class="mono">${own}<span class="mu" style="font-size:12px;font-weight:500;font-family:var(--sans)"> &nbsp;owned</span></div>
-      <div class="mu" style="font-size:12px;margin-top:4px">${card.prints.length} printing${card.prints.length>1?"s":""} · ${card.kw.join(" · ")}</div>
+      <div class="mu" style="font-size:12px;margin-top:4px">${(()=>{let t=0,k=0,n=0;for(const e of Object.values(S.col)){if(e.id!==card.id)continue;const v=entryValue(e);if(v){t+=v.total;k+=v.known;n+=v.of;}}return k?`worth ${fmt(t)}${k<n?" (partial)":""} · `:"";})()}${card.prints.length} printing${card.prints.length>1?"s":""}</div>
     </div>
   </div>
   ${card.o?`<div class="h">Oracle</div><div class="oracle">${esc(card.o)}</div>`:""}
   <div class="h">Printings</div>
-  <div class="lst">${shown.map(p=>{const n=ownedPrint(card.id,p.set,p.num);return `<div class="row ${n?"":"dim"}">${thumb(card,"sm","",p)}<div class="tx"><div class="n mono">${pr(p)} <span class="mu" style="font-weight:400;font-size:11px">${RARITY[p.rarity]||""}</span></div><div class="d">${esc(setName(p.set))} · ${setYear(p.set)}</div></div>
+  <div class="lst">${shown.map(p=>{const n=ownedPrint(card.id,p.set,p.num);return `<div class="row ${n?"":"dim"}">${thumb(card,"sm","",p)}<div class="tx"><div class="n mono">${pr(p)} <span class="mu" style="font-weight:400;font-size:11px">${RARITY[p.rarity]||""}</span></div><div class="d">${esc(setName(p.set))} · ${setYear(p.set)}${priceOf(p)!=null?` · <span class="mono" style="color:var(--fg)">${fmt(priceOf(p))}</span>${priceOf(p,true)!=null&&priceOf(p,true)!==priceOf(p)?`<span class="mono"> · foil ${fmt(priceOf(p,true))}</span>`:""}`:""}</div></div>
     <div class="step" role="group" aria-label="${pr(p)} copies"><button data-dec="${p.set}|${esc(p.num)}" ${n?"":"disabled"} aria-label="Remove one">−</button><span class="v" aria-live="polite">${n}</span><button data-inc="${p.set}|${esc(p.num)}" aria-label="Add one">+</button></div></div>`;}).join("")}</div>
   ${card.prints.length>shown.length?`<button class="btn sm ghost" id="allp" style="margin-top:6px">Show all ${card.prints.length} printings</button>`:(showAllPrints&&card.prints.length>8?`<button class="btn sm ghost" id="allp" style="margin-top:6px">Show fewer</button>`:"")}
   ${own?`<div class="h">Copies</div><div class="lst">${Object.values(S.col).filter(e=>e.id===card.id).flatMap(e=>e.copies.map(cp=>({e,cp}))).sort((a,b)=>b.cp.date.localeCompare(a.cp.date)).slice(0,8).map(({e,cp})=>`<div class="row" style="min-height:40px"><div class="tx"><div class="d" style="color:var(--fg)"><span class="mono">${cp.date}</span><span class="mu">·</span>${pr(e)}<span class="mu">·</span>${cp.cond}${cp.foil?'<span class="pill">foil</span>':""}</div></div><span class="mu" style="font-size:12px">${cp.via==="scan"?"scan "+cp.conf+"%":cp.via}</span></div>`).join("")}</div>`:""}
   ${decksIn.length?`<div class="h">In decks</div><div class="chips" style="margin-top:0">${decksIn.map(x=>`<button class="chip" data-deck="${x.d.id}">${esc(x.d.name)} · ${x.n}</button>`).join("")}</div>`:""}
   <div class="btnrow" style="margin-top:auto;padding-top:16px"><button class="btn" id="scanone">Scan a copy</button><button class="btn pri" id="addone">+ Add copy</button></div>`;
+  wantPrices(shown.slice(0,PRICE_BATCH));
   $("#bk").onclick=()=>{showAllPrints=false;back();};
   el.querySelectorAll("[data-inc]").forEach(b=>b.onclick=()=>{const [set,num]=b.dataset.inc.split("|");addCopy(S.col,card.id,set,num,{cond:"NM",foil:false,via:"typed",date:today()});save();rCard();toast(`${card.name} · ${set.toUpperCase()} ${num} · now ×${ownedPrint(card.id,set,num)}`);});
   el.querySelectorAll("[data-dec]").forEach(b=>b.onclick=()=>{const [set,num]=b.dataset.dec.split("|");const k=pk(card.id,set,num);const e=S.col[k];const removed=e.copies.pop();if(!e.copies.length)delete S.col[k];save();rCard();toast(`Removed 1 · ${set.toUpperCase()} ${num}`,()=>{addCopy(S.col,card.id,set,num,removed);save();if(view==="card")rCard();});});
@@ -509,7 +564,7 @@ function rBinder(){
   const names={W:"White",U:"Blue",B:"Black",R:"Red",G:"Green",M:"Multi",C:"Colourless"};
   el.innerHTML=`<div class="top"><div><h1>${names[binderTab]}</h1><div class="s">page ${binderPage+1} of ${pages} · ${entries.reduce((n,e)=>n+e.copies.length,0)} cards · ${totalOwned()} total</div></div></div>
   <div class="sidetabs">${["W","U","B","R","G","M","C"].map(x=>`<button class="${x===binderTab?"on":""}" data-bt="${x}">${x==="M"?'<span class="pips"><span class="pip R"></span><span class="pip W"></span></span>':x==="C"?'<span class="pip">C</span>':`<span class="pip ${x}"></span>`}</button>`).join("")}</div>
-  <div class="grid3" id="bgrid">${slice.map(e=>{const card=BY_ID[e.id];const foil=e.copies.some(c=>c.foil);return `<button data-card="${esc(card.id)}" aria-label="${esc(card.name)}, ${pr(e)}, ${e.copies.length} owned">${thumb(card,"md",foil?'<span class="foil" title="foil"></span>':"")}<span class="lbl">${pr(e)} · <b>×${e.copies.length}</b></span></button>`;}).join("")}${Array.from({length:9-slice.length}).map(()=>'<div class="card md ph" aria-hidden="true"><div class="art"></div></div>').join("")}</div>
+  <div class="grid3" id="bgrid">${slice.map(e=>{const card=BY_ID[e.id];const foil=e.copies.some(c=>c.foil);return `<button data-card="${esc(card.id)}" aria-label="${esc(card.name)}, ${pr(e)}, ${e.copies.length} owned">${thumb(card,"md",foil?'<span class="foil" title="foil"></span>':"")}<span class="lbl">${pr(e)} · <b>×${e.copies.length}</b>${(()=>{const v=entryValue(e);return v&&v.known?` · ${fmt(v.total)}`:"";})()}</span></button>`;}).join("")}${Array.from({length:9-slice.length}).map(()=>'<div class="card md ph" aria-hidden="true"><div class="art"></div></div>').join("")}</div>
   <div class="dots">${Array.from({length:Math.min(pages,40)}).map((_,i)=>`<i class="${i===binderPage?"on":""}"></i>`).join("")}</div>
   <div class="btnrow" style="margin-top:0"><button class="btn sm" id="pp" ${binderPage?"":"disabled"} style="flex:1">‹ Prev</button><button class="btn sm" id="np" ${binderPage<pages-1?"":"disabled"} style="flex:1">Next ›</button></div>
   <div class="h">Sets in this colour</div>
@@ -587,6 +642,105 @@ function openSuggestSheet(line,deck){
   openSheet();
 }
 
+/* ========================= IMPORT / EXPORT / BACKUP ========================= */
+function csvQuote(v){v=String(v==null?"":v);return /[",\n\r]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v;}
+function exportCSV(){
+  const rows=[["Count","Name","Edition","Collector Number","Foil","Condition","Scryfall ID"]];
+  for(const e of Object.values(S.col)){const card=BY_ID[e.id];const p=card.prints.find(x=>x.set===e.set&&x.num===e.num)||{};
+    const groups={};for(const cp of e.copies){const k=(cp.foil?"foil":"")+"|"+(cp.cond||"NM");groups[k]=(groups[k]||0)+1;}
+    for(const k in groups){const [f,cond]=k.split("|");rows.push([groups[k],card.name,e.set.toUpperCase(),e.num,f?"foil":"",cond,p.sid?dashed(p.sid):""]);}}
+  return rows.map(r=>r.map(csvQuote).join(",")).join("\n");
+}
+function exportList(){
+  const lines=[];for(const e of Object.values(S.col)){const card=BY_ID[e.id];const nf=e.copies.filter(c=>!c.foil).length,f=e.copies.length-nf;
+    if(nf)lines.push(`${nf} ${card.name} (${e.set.toUpperCase()}) ${e.num}`);if(f)lines.push(`${f} ${card.name} (${e.set.toUpperCase()}) ${e.num} *F*`);}
+  return lines.join("\n");
+}
+function downloadText(name,text,type){
+  try{const blob=new Blob([text],{type:type||"text/plain"});const u=URL.createObjectURL(blob);const a=document.createElement("a");a.href=u;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(u),4000);toast("Downloading "+name);}
+  catch(e){copyText(text,"Download blocked here; copied instead");}
+}
+/* Minimal CSV parser: quotes, escaped quotes, CRLF. */
+function parseCSV(text){
+  const rows=[];let row=[],cell="",q=false;
+  for(let i=0;i<text.length;i++){const ch=text[i];
+    if(q){if(ch==='"'){if(text[i+1]==='"'){cell+='"';i++;}else q=false;}else cell+=ch;}
+    else if(ch==='"')q=true;else if(ch===","){row.push(cell);cell="";}
+    else if(ch==="\n"||ch==="\r"){if(ch==="\r"&&text[i+1]==="\n")i++;row.push(cell);rows.push(row);row=[];cell="";}
+    else cell+=ch;}
+  if(cell.length||row.length){row.push(cell);rows.push(row);}
+  return rows.filter(r=>r.some(c=>c.trim()!==""));
+}
+const COLS={
+  name:["name","card name","card","product name","cardname"],
+  set:["set code","set","edition code","edition","setcode","set_code","expansion code"],
+  setname:["set name","expansion","edition name","setname"],
+  num:["collector number","collector's number","collectors number","number","card number","collectornumber","collector_number","cn"],
+  foil:["foil","finish","printing","foil/etched","is_foil","variant"],
+  qty:["quantity","qty","count","quantityx","total quantity","amount","q"],
+  id:["scryfall id","scryfall_id","scryfallid","id","scryfall"],
+  cond:["condition","cond"]
+};
+function colIndex(header,key){const h=header.map(x=>x.trim().toLowerCase());for(const n of COLS[key]){const i=h.indexOf(n);if(i>-1)return i;}return -1;}
+function isFoilValue(v){v=String(v||"").trim().toLowerCase();return ["foil","true","yes","y","1","etched","foil etched","*f*"].includes(v)||/foil/.test(v)&&!/non/.test(v);}
+function normCond(v){v=String(v||"").trim().toUpperCase();const m={"NEAR MINT":"NM","NM":"NM","MINT":"NM","M":"NM","LIGHTLY PLAYED":"LP","LP":"LP","EXCELLENT":"LP","EX":"LP","GOOD":"LP","MODERATELY PLAYED":"MP","MP":"MP","PLAYED":"MP","PL":"MP","HEAVILY PLAYED":"HP","HP":"HP","POOR":"HP","DAMAGED":"HP","D":"HP"};return m[v]||(["NM","LP","MP","HP"].includes(v)?v:"NM");}
+let BY_SID=null;
+function findBySid(sid){if(!BY_SID){BY_SID=new Map();for(const c of INDEX)for(const p of c.prints)if(p.sid)BY_SID.set(p.sid,{card:c,print:p});}return BY_SID.get(String(sid).replace(/-/g,"").toLowerCase())||null;}
+const normSet=n=>String(n||"").toLowerCase().replace(/&/g,"and").replace(/[^a-z0-9]+/g," ").trim();
+function setCodeFromName(name){const n=normSet(name);if(!n)return null;for(const code in SETS)if(normSet(SETS[code][0])===n)return code;const alt=n.replace(/\bii\b/,"2").replace(/\biii\b/,"3");for(const code in SETS)if(normSet(SETS[code][0]).replace(/\bii\b/,"2").replace(/\biii\b/,"3")===alt)return code;return null;}
+/* Resolve one imported line to a printing. Order: Scryfall id, name+set+number, name+set, name. */
+function resolveLine(l){
+  if(l.id){const hit=findBySid(l.id);if(hit)return {card:hit.card,print:hit.print,how:"id"};}
+  const nm=String(l.name||"").replace(/\s*\/\/.*$/,"").trim().toLowerCase();if(!nm)return null;
+  const card=BY_LOWER[nm]||INDEX.find(x=>x.lower.startsWith(nm+" //"));if(!card)return null;
+  let set=(l.set||"").trim().toLowerCase();if(!set&&l.setname)set=setCodeFromName(l.setname)||"";
+  const num=String(l.num||"").trim().replace(/^0+(?=\d)/,"");
+  if(set&&num){const p=card.prints.find(x=>x.set===set&&String(x.num).replace(/^0+(?=\d)/,"")===num);if(p)return {card,print:p,how:"set+number"};}
+  if(set){const ps=card.prints.filter(x=>x.set===set).sort((a,b)=>parseInt(a.num,10)-parseInt(b.num,10));if(ps.length)return {card,print:ps[0],how:"set"};}
+  return {card,print:defaultPrint(card),how:"name"};
+}
+function parseImport(text){
+  const lines=[];const rows=parseCSV(text);
+  const header=rows[0]||[];const iName=colIndex(header,"name");
+  if(rows.length>1&&iName>-1){
+    const ix={set:colIndex(header,"set"),setname:colIndex(header,"setname"),num:colIndex(header,"num"),foil:colIndex(header,"foil"),qty:colIndex(header,"qty"),id:colIndex(header,"id"),cond:colIndex(header,"cond")};
+    for(const r of rows.slice(1)){const g=i=>i>-1?r[i]:"";lines.push({name:g(iName),set:g(ix.set),setname:g(ix.setname),num:g(ix.num),foil:isFoilValue(g(ix.foil)),qty:Math.max(1,parseInt(String(g(ix.qty)).replace(/[^0-9]/g,""),10)||1),id:g(ix.id),cond:normCond(g(ix.cond))});}
+    return {lines,kind:"csv"};
+  }
+  for(const l of text.split(/\r?\n/)){const t=l.trim();if(!t||/^(\/\/|#|sideboard|deck|commander|about|name )/i.test(t))continue;
+    const m=t.match(/^(\d+)\s*x?\s+(.+?)(?:\s+\(([A-Za-z0-9]{2,6})\)\s*([^\s*]+)?)?\s*(\*F\*)?\s*$/);
+    if(m)lines.push({name:m[2],set:(m[3]||"").toLowerCase(),num:m[4]||"",foil:!!m[5],qty:+m[1],cond:"NM"});else lines.push({name:t,qty:1,cond:"NM",foil:false});}
+  return {lines,kind:"list"};
+}
+async function importFile(file){
+  const text=await file.text();const {lines,kind}=parseImport(text);
+  const ok=[],miss=[];for(const l of lines){const r=resolveLine(l);if(r)ok.push({l,r});else miss.push(l);}
+  const copies=ok.reduce((n,x)=>n+x.l.qty,0);const byHow={};for(const x of ok)byHow[x.r.how]=(byHow[x.r.how]||0)+1;
+  $("#sheet").innerHTML=`<div class="grab"></div>
+  <div style="font-weight:700;font-size:17px">Import ${esc(file.name)}</div>
+  <div class="mu" style="font-size:12.5px;margin-top:2px">${kind==="csv"?"CSV":"Decklist"} · ${lines.length} lines · ${copies} copies matched${miss.length?` · <span style="color:var(--wn)">${miss.length} not matched</span>`:""}</div>
+  <div class="h">How printings were matched</div>
+  <div class="sect" style="font-size:12.5px;line-height:1.6">${["id","set+number","set","name"].filter(k=>byHow[k]).map(k=>`${byHow[k]} by ${k==="id"?"Scryfall id":k==="set+number"?"set and collector number":k==="set"?"set only (lowest number in the set)":"name only (newest booster printing)"}`).join("<br>")||"nothing matched"}</div>
+  ${miss.length?`<div class="h">Not in the index</div><div class="lst">${miss.slice(0,8).map(l=>`<div class="row" style="min-height:36px"><div class="tx"><div class="n" style="font-weight:500">${esc(l.name||"(blank)")}</div></div><span class="q">${l.qty}</span></div>`).join("")}${miss.length>8?`<div class="note">and ${miss.length-8} more</div>`:""}</div>`:""}
+  <div class="h">Preview</div>
+  <div class="lst">${ok.slice(0,6).map(({l,r})=>`<div class="row" style="min-height:44px">${stripe(r.card)}${thumb(r.card,"sm","",r.print)}<div class="tx"><div class="n">${esc(r.card.name)}</div><div class="d">${pr(r.print)} · ${l.foil?"foil · ":""}${l.cond}</div></div><span class="q own">×${l.qty}</span></div>`).join("")}${ok.length>6?`<div class="note">and ${ok.length-6} more lines</div>`:""}</div>
+  <div class="btnrow"><button class="btn ghost" id="impcancel">Cancel</button><button class="btn pri" id="impok" ${ok.length?"":"disabled"}>Add ${copies} cop${copies===1?"y":"ies"}</button></div>`;
+  $("#impcancel").onclick=closeSheet;
+  $("#impok").onclick=()=>{const d=today();for(const {l,r} of ok)for(let i=0;i<l.qty;i++)addCopy(S.col,r.card.id,r.print.set,r.print.num,{cond:l.cond,foil:l.foil,via:"import",date:d});save();closeSheet();wantOwnedPrices();render();toast(`Imported ${copies} copies from ${file.name}`);};
+  openSheet();
+}
+async function restoreBackup(file){
+  let data=null;try{data=JSON.parse(await file.text());}catch(e){toast("That file isn't a Binder backup");return;}
+  const st=data&&data.state;if(!st||typeof st!=="object"||!st.col){toast("That file isn't a Binder backup");return;}
+  const n=Object.values(st.col).reduce((a,e)=>a+(e.copies?e.copies.length:0),0);
+  $("#sheet").innerHTML=`<div class="grab"></div><div style="font-weight:700;font-size:17px">Restore ${esc(file.name)}?</div>
+  <div class="mu" style="font-size:12.5px;margin-top:4px">Backup from ${esc(data.at||"unknown date")} · ${n} cards · ${(st.decks||[]).length} decks. This replaces the ${totalOwned()} cards and ${S.decks.length} decks here now.</div>
+  <div class="btnrow"><button class="btn ghost" id="rbcancel">Cancel</button><button class="btn pri" id="rbok">Replace and restore</button></div>`;
+  $("#rbcancel").onclick=closeSheet;
+  $("#rbok").onclick=()=>{S=Object.assign(empty(),st);for(const k of Object.keys(S.col))if(!BY_ID[S.col[k].id])delete S.col[k];S.review=(S.review||[]).filter(r=>BY_ID[r.guess]);save();closeSheet();wantOwnedPrices();go("search");toast("Backup restored");};
+  openSheet();
+}
+
 /* ========================= MORE ========================= */
 let confirmReset=false;
 function rMore(){
@@ -597,18 +751,37 @@ function rMore(){
   <div class="note">Reset re-downloads the app, index and OCR engine on next load. Your collection stays.</div>
   ${ocrState==="idle"?'<button class="btn" id="warm" style="margin-top:10px">Start OCR engine now</button>':""}
   ${ocrState==="failed"?`<div class="sect warn" style="margin-top:10px;font-size:12.5px">${esc(ocrErr)}</div>`:""}
+  <div class="h">Collection value</div>
+  <div class="sect">${(()=>{const v=collectionValue();const h=S.hist||[];return `<div style="display:flex;justify-content:space-between;align-items:baseline"><span style="font-size:26px;font-weight:700" class="mono">${v.known?fmt(v.total):"—"}</span><span class="mu" style="font-size:12px">${v.known?`${v.known} of ${v.of} copies priced`:(v.of?"no prices yet":"no cards yet")}</span></div>
+    ${h.length>1?sparkline(h):'<div class="note">A point is added each day the collection is fully priced; the line appears after the second day.</div>'}
+    <div class="mu" style="font-size:12px;margin-top:10px">Prices from Scryfall (TCGplayer, Cardmarket) · ${ago(pricesAsOf())}${priceErr?" · "+esc(priceErr):""}</div><div class="chips"><button class="chip ${currency()==="usd"?"on":""}" data-cur="usd">USD · TCGplayer</button><button class="chip ${currency()==="eur"?"on":""}" data-cur="eur">EUR · Cardmarket</button></div>`;})()}</div>
+  <button class="btn" id="refreshp" style="margin-top:10px" ${priceBusy?"disabled":""}>${priceBusy?"Fetching prices…":"Refresh prices now"}</button>
   <div class="h">Card images</div>
   <div class="sect"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px"><div><div>Show card art</div><div class="note" style="margin-top:2px">Loaded from Scryfall as you browse; cards you've viewed stay cached for offline use.</div></div><button class="chip ${imagesOn()?"on":""}" id="imgtoggle" role="switch" aria-checked="${imagesOn()}">${imagesOn()?"On":"Off"}</button></div></div>
+  <div class="h">Import</div>
+  <label class="btn"><input type="file" id="impfile" accept=".csv,.txt,text/csv,text/plain">Import a CSV or decklist file</label>
+  <div class="note">ManaBox, Delver Lens, TCGplayer, Dragon Shield, Moxfield and Archidekt exports all work: Binder reads name, set code, collector number, foil, quantity and Scryfall id from whichever columns are there, and shows what matched before adding anything.</div>
   <div class="h">Export</div>
-  <button class="btn" id="csv">Copy collection as CSV</button>
-  <div class="note">One row per printing: name, set, collector number, quantity, foil count, conditions. Paste into a sheet or Moxfield.</div>
+  <div class="btnrow" style="margin-top:0"><button class="btn" id="csvdl">Download CSV</button><button class="btn" id="csv">Copy CSV</button></div>
+  <button class="btn" id="moxtxt" style="margin-top:8px">Copy as Moxfield list</button>
+  <div class="note">CSV has one row per printing and finish with the Scryfall id, so Moxfield, Archidekt, MythicHub and Deckbox import it directly. The list form is <span class="mono">1 Lightning Bolt (CLB) 187 *F*</span>.</div>
+  <div class="h">Backup</div>
+  <div class="btnrow" style="margin-top:0"><button class="btn" id="bkdl">Download backup</button><label class="btn"><input type="file" id="bkfile" accept=".json,application/json">Restore backup</label></div>
+  <div class="note">A JSON file with the collection, decks, review queue and settings. Restoring replaces what's here.</div>
   <div class="h">Data</div>
   <div class="note" style="margin-top:0">The collection lives in this browser's local storage. The card index (magic-search-engine build of 2026-10-17, every printing through the latest sets) and the OCR engine (Tesseract.js 5, English LSTM model) are cached by the service worker after first use, so the whole app works offline; card art is the one thing fetched on demand. Add it to your home screen for a full-screen install.</div>
   <div class="btnrow" style="margin-top:10px"><button class="btn" id="demo">Load demo collection</button><button class="btn" id="reset">Clear everything</button></div>`;
-  $("#csv").onclick=()=>{const rows=[["name","set","number","qty","foil","conditions"]];for(const e of Object.values(S.col)){rows.push([BY_ID[e.id].name,e.set.toUpperCase(),e.num,e.copies.length,e.copies.filter(c=>c.foil).length,e.copies.map(c=>c.cond).join(" ")]);}copyText(rows.map(r=>r.map(v=>/[",\n]/.test(String(v))?'"'+String(v).replace(/"/g,'""')+'"':v).join(",")).join("\n"),"CSV copied");};
+  $("#csv").onclick=()=>copyText(exportCSV(),"CSV copied");
+  $("#csvdl").onclick=()=>downloadText("binder-collection-"+today()+".csv",exportCSV(),"text/csv");
+  $("#moxtxt").onclick=()=>copyText(exportList(),"List copied");
+  $("#bkdl").onclick=()=>downloadText("binder-backup-"+today()+".json",JSON.stringify({app:"binder",version:APP_VERSION,at:new Date().toISOString(),state:S},null,1),"application/json");
+  $("#bkfile").onchange=e=>{const f=e.target.files[0];if(f)restoreBackup(f);e.target.value="";};
+  $("#impfile").onchange=e=>{const f=e.target.files[0];if(f)importFile(f);e.target.value="";};
   $("#demo").onclick=()=>{S=seed();save();lastImg=null;go("search");toast("Demo collection loaded");};
   $("#reset").onclick=()=>{if(!confirmReset){confirmReset=true;$("#reset").textContent="Tap again to clear";setTimeout(()=>{confirmReset=false;const b=$("#reset");if(b)b.textContent="Clear everything";},4000);return;}confirmReset=false;S=empty();save();lastImg=null;go("search");toast("Collection cleared");};
   $("#checkupd").onclick=async()=>{const b=$("#checkupd");b.disabled=true;b.textContent="Checking…";try{if(swReg)await swReg.update();}catch(e){}setTimeout(()=>{if(document.contains(b)){b.disabled=false;b.textContent="Check for updates";toast("You're on the latest version");}},2500);};
+  el.querySelectorAll("[data-cur]").forEach(b=>b.onclick=()=>{S.prefs=S.prefs||{};S.prefs.currency=b.dataset.cur;save();snapshotValue();rMore();});
+  $("#refreshp").onclick=()=>{for(const k in (S.prices||{}))S.prices[k].at=0;wantOwnedPrices();rMore();};
   $("#clearcache").onclick=async()=>{const b=$("#clearcache");b.disabled=true;b.textContent="Resetting…";try{if("serviceWorker" in navigator){const rs=await navigator.serviceWorker.getRegistrations();await Promise.all(rs.map(r=>r.unregister()));}if(window.caches){const ks=await caches.keys();await Promise.all(ks.map(k=>caches.delete(k)));}}catch(e){}location.reload();};
   $("#imgtoggle").onclick=()=>{S.prefs=S.prefs||{};S.prefs.images=!imagesOn();save();rMore();};
   const wm=$("#warm");if(wm)wm.onclick=async()=>{wm.disabled=true;wm.textContent="Starting…";await getOCR();rMore();toast(ocrState==="ready"?"OCR ready":"OCR couldn't start");};
@@ -635,10 +808,12 @@ function copyText(txt,msg){
   $("#tabbar").hidden=false;
   render();
   try{setupUpdates();}catch(e){}
+  wantOwnedPrices();
+  window.addEventListener("online",()=>{wantOwnedPrices();});
 })();
 /* After a deploy the old cached app runs once while the new service worker installs.
    When the new one takes over, reload once so the new build is what you see. */
-const APP_VERSION="20261017e";
+const APP_VERSION="20261017f";
 let swReg=null;
 function setupUpdates(){
   if(!("serviceWorker" in navigator))return;

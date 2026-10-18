@@ -11,7 +11,8 @@ Live: https://www.yjmrobert.com/binder/ (the github.io address redirects there)
 - **Binder** — your collection by colour identity, nine cards a page, with set breakdowns.
 - **Decks** — paste a decklist (Arena, Moxfield or plain lines), see what you own and what's missing, and get substitutes suggested from cards you already have.
 - **Card art** — loaded on demand from Scryfall's image CDN by printing, over a typographic fallback card that stays when offline. Images you've viewed are cached by the service worker (up to a few thousand), so your own collection's art is available offline after one look. Toggle under More.
-- **Export** — collection as CSV, one row per printing.
+- **Prices and value** — per-printing prices from Scryfall's collection endpoint (TCGplayer USD, Cardmarket EUR), fetched only for what you own and the card you're viewing, cached for a day; collection total with a daily history line under More.
+- **Import and export** — import ManaBox, Delver Lens, TCGplayer, Dragon Shield, Moxfield or Archidekt CSV exports (or a plain decklist) with a match preview; export CSV with Scryfall ids or a Moxfield-style list; JSON backup and restore.
 
 Everything is stored in the browser's local storage. Add the page to your home screen for a full-screen install; the service worker caches the index and OCR engine so it keeps working with no signal. The phone's back button closes sheets and returns from card and deck screens, and tabs and cards are deep-linkable (`#binder`, `#card/Lightning%20Bolt`; `#demo/…` loads the demo collection first).
 
