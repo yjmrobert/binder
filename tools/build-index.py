@@ -5,7 +5,8 @@
     python3 tools/build-index.py tools/magic-search-engine
 
 Reads index/cards.jsonl, index/sets.json and index/scryfall_ids.txt from that
-checkout and writes data/cards0.json, data/cards1.json and data/sets.json. Bump VERSION in sw.js
+checkout and writes data/cards0.json, data/cards1.json and data/sets.json
+(set code -> [name, year, types, base_set_size]). Bump VERSION in sw.js
 afterwards so installed clients pick up the new files.
 
 Row shape in cards*.json:
@@ -27,7 +28,7 @@ def main(src):
 
     with open(os.path.join(src, "index", "sets.json")) as f:
         sets = json.load(f)
-    setslim = {c: [s.get("name", c), (s.get("release_date") or "")[:4], s.get("types", [])[:3]] for c, s in sets.items()}
+    setslim = {c: [s.get("name", c), (s.get("release_date") or "")[:4], s.get("types", [])[:3], s.get("base_set_size") or 0] for c, s in sets.items()}
 
     ids = {}
     with open(os.path.join(src, "index", "scryfall_ids.txt")) as f:

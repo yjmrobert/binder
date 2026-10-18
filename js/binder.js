@@ -12,7 +12,7 @@ function setYear(code){return (SETS[code]||["",""])[1];}
 function buildCard(r){
   const [name,types,sub,sup,mana,ci,o,k,mv,prints,pw,tg]=r;
   const cost=(mana||"").replace(/[{}]/g,"").toUpperCase().replace(/\/(?=[WUBRGC])/g,"");
-  const ps=prints.map(p=>({set:p[0],num:p[1],rarity:p[2],sid:p[3]||""})).reverse();
+  const ps=prints.map(p=>({set:p[0],num:p[1],rarity:p[2],sid:p[3]||"",n:/^\d+$/.test(p[1])?+p[1]:NaN})).reverse();
   const card={id:name,name,types:types||[],sub:sub||[],sup:sup||[],cost,ci:(ci||"").toUpperCase().split("").filter(x=>"WUBRG".includes(x)),o:o||"",kw:(k||[]).map(x=>x.toLowerCase()),mv:mv||0,prints:ps,pt:pw!=null?pw+"/"+tg:""};
   card.type=[...card.sup,...card.types].join(" ")+(card.sub.length?" — "+card.sub.join(" "):"");
   card.lower=name.toLowerCase();
@@ -57,7 +57,7 @@ function seed(){
     session:[],prefs:{}};
 }
 function pk(id,set,num){return id+"|"+set+"|"+num;}
-function addCopy(col,id,set,num,copy){const k=pk(id,set,num);(col[k]=col[k]||{id,set,num,copies:[]}).copies.push(copy);if(typeof S!=="undefined"&&S&&col===S.col){const c=BY_ID[id];const p=c&&c.prints.find(x=>x.set===set&&x.num===num);if(p&&typeof wantPrices==="function")setTimeout(()=>wantPrices([p]),0);}}
+function addCopy(col,id,set,num,copy){const k=pk(id,set,num);(col[k]=col[k]||{id,set,num,copies:[]}).copies.push(copy);if(typeof SETSTATS!=="undefined")SETSTATS=null;if(typeof S!=="undefined"&&S&&col===S.col){const c=BY_ID[id];const p=c&&c.prints.find(x=>x.set===set&&x.num===num);if(p&&typeof wantPrices==="function")setTimeout(()=>wantPrices([p]),0);}}
 function empty(){return {col:{},review:[],decks:[],session:[],prefs:{}};}
 function load(){try{const raw=localStorage.getItem(KEY);if(raw){S=JSON.parse(raw);for(const k of Object.keys(S.col))if(!BY_ID[S.col[k].id])delete S.col[k];S.review=S.review.filter(r=>BY_ID[r.guess]);return;}}catch(e){}S=empty();save();}
 function save(){try{localStorage.setItem(KEY,JSON.stringify(S));}catch(e){}}
@@ -145,7 +145,7 @@ function rerender(){const a=document.activeElement;if(a&&/^(input|textarea)$/i.t
 /* ========================= NAV ========================= */
 let view="search",stack=[],curArg=null;
 const TABS=["search","scan","binder","decks","more"];
-const TABOF={card:"search",deck:"decks",review:"scan"};
+const TABOF={card:"search",deck:"decks",review:"scan",setlist:"binder",typelist:"binder",checklist:"binder"};
 /* Sub-screens push a history entry so the phone's back button (or Escape) returns from a card
    instead of leaving the app. Sheets do the same. */
 function go(v,arg){
@@ -168,7 +168,7 @@ function render(){
   const tab=TABS.includes(view)?view:(TABOF[view]||stack[0]?.view||"search");
   document.querySelectorAll("#tabbar button").forEach(b=>{const on=b.dataset.tab===tab;b.classList.toggle("on",on);if(on)b.setAttribute("aria-current","page");else b.removeAttribute("aria-current");});
   const bd=$("#rvbadge");bd.hidden=!S.review.length;bd.textContent=S.review.length;
-  ({search:rSearch,scan:rScan,binder:rBinder,decks:rDecks,card:rCard,deck:rDeck,review:rReview,more:rMore})[view]();
+  ({search:rSearch,scan:rScan,binder:rBinder,decks:rDecks,card:rCard,deck:rDeck,review:rReview,more:rMore,checklist:rChecklist})[view]();
   const el=$("#v-"+view);el.classList.add("on");el.removeAttribute("aria-hidden");el.scrollTop=0;
 }
 
@@ -260,14 +260,14 @@ function rCard(){
     ${thumb(card,"lg")}
     <div style="flex:1;min-width:0">
       <div style="font-weight:700;font-size:19px;line-height:1.15;text-wrap:balance">${esc(card.name)}</div>
-      <div class="mu" style="font-size:13px;margin:4px 0 10px;display:flex;align-items:center;gap:6px;flex-wrap:wrap">${pips(card.cost)} <span>${esc(card.type)}</span>${card.pt?`<span class="mono">${esc(card.pt)}</span>`:""}</div>
+      <div class="mu" style="font-size:13px;margin:4px 0 10px;display:flex;align-items:center;gap:6px;flex-wrap:wrap">${pips(card.cost)} <span>${esc([...card.sup,...card.types].join(" "))}${card.sub.length?" — ":""}${card.sub.map(t=>(card.types.includes("Creature")||card.types.includes("Kindred"))?`<button class="lnk" data-typelink="${esc(t)}">${esc(t)}</button>`:esc(t)).join(" ")}</span>${card.pt?`<span class="mono">${esc(card.pt)}</span>`:""}</div>
       <div style="font-size:30px;font-weight:700;line-height:1" class="mono">${own}<span class="mu" style="font-size:12px;font-weight:500;font-family:var(--sans)"> &nbsp;owned</span></div>
       <div class="mu" style="font-size:12px;margin-top:4px">${(()=>{let t=0,k=0,n=0;for(const e of Object.values(S.col)){if(e.id!==card.id)continue;const v=entryValue(e);if(v){t+=v.total;k+=v.known;n+=v.of;}}return k?`worth ${fmt(t)}${k<n?" (partial)":""} · `:"";})()}${card.prints.length} printing${card.prints.length>1?"s":""}</div>
     </div>
   </div>
   ${card.o?`<div class="h">Oracle</div><div class="oracle">${esc(card.o)}</div>`:""}
   <div class="h">Printings</div>
-  <div class="lst">${shown.map(p=>{const n=ownedPrint(card.id,p.set,p.num);return `<div class="row ${n?"":"dim"}">${thumb(card,"sm","",p)}<div class="tx"><div class="n mono">${pr(p)} <span class="mu" style="font-weight:400;font-size:11px">${RARITY[p.rarity]||""}</span></div><div class="d">${esc(setName(p.set))} · ${setYear(p.set)}${priceOf(p)!=null?` · <span class="mono" style="color:var(--fg)">${fmt(priceOf(p))}</span>${priceOf(p,true)!=null&&priceOf(p,true)!==priceOf(p)?`<span class="mono"> · foil ${fmt(priceOf(p,true))}</span>`:""}`:""}</div></div>
+  <div class="lst">${shown.map(p=>{const n=ownedPrint(card.id,p.set,p.num);return `<div class="row ${n?"":"dim"}">${thumb(card,"sm","",p)}<div class="tx"><div class="n mono">${pr(p)} <span class="mu" style="font-weight:400;font-size:11px">${RARITY[p.rarity]||""}</span></div><div class="d"><button class="lnk" data-setlink="${p.set}">${esc(setName(p.set))}</button> · ${setYear(p.set)}${priceOf(p)!=null?` · <span class="mono" style="color:var(--fg)">${fmt(priceOf(p))}</span>${priceOf(p,true)!=null&&priceOf(p,true)!==priceOf(p)?`<span class="mono"> · foil ${fmt(priceOf(p,true))}</span>`:""}`:""}</div></div>
     <div class="step" role="group" aria-label="${pr(p)} copies"><button data-dec="${p.set}|${esc(p.num)}" ${n?"":"disabled"} aria-label="Remove one">−</button><span class="v" aria-live="polite">${n}</span><button data-inc="${p.set}|${esc(p.num)}" aria-label="Add one">+</button></div></div>`;}).join("")}</div>
   ${card.prints.length>shown.length?`<button class="btn sm ghost" id="allp" style="margin-top:6px">Show all ${card.prints.length} printings</button>`:(showAllPrints&&card.prints.length>8?`<button class="btn sm ghost" id="allp" style="margin-top:6px">Show fewer</button>`:"")}
   ${own?`<div class="h">Copies</div><div class="lst">${Object.values(S.col).filter(e=>e.id===card.id).flatMap(e=>e.copies.map(cp=>({e,cp}))).sort((a,b)=>b.cp.date.localeCompare(a.cp.date)).slice(0,8).map(({e,cp})=>`<div class="row" style="min-height:40px"><div class="tx"><div class="d" style="color:var(--fg)"><span class="mono">${cp.date}</span><span class="mu">·</span>${pr(e)}<span class="mu">·</span>${cp.cond}${cp.foil?'<span class="pill">foil</span>':""}</div></div><span class="mu" style="font-size:12px">${cp.via==="scan"?"scan "+cp.conf+"%":cp.via}</span></div>`).join("")}</div>`:""}
@@ -279,6 +279,8 @@ function rCard(){
   el.querySelectorAll("[data-dec]").forEach(b=>b.onclick=()=>{const [set,num]=b.dataset.dec.split("|");const k=pk(card.id,set,num);const e=S.col[k];const removed=e.copies.pop();if(!e.copies.length)delete S.col[k];save();rCard();toast(`Removed 1 · ${set.toUpperCase()} ${num}`,()=>{addCopy(S.col,card.id,set,num,removed);save();if(view==="card")rCard();});});
   el.querySelectorAll("[data-deck]").forEach(b=>b.onclick=()=>go("deck",{id:b.dataset.deck}));
   const ap=$("#allp");if(ap)ap.onclick=()=>{showAllPrints=!showAllPrints;rCard();};
+  el.querySelectorAll("[data-setlink]").forEach(b=>b.onclick=e=>{e.stopPropagation();go("checklist",{kind:"set",code:b.dataset.setlink});});
+  el.querySelectorAll("[data-typelink]").forEach(b=>b.onclick=e=>{e.stopPropagation();go("checklist",{kind:"type",code:b.dataset.typelink});});
   $("#addone").onclick=()=>openAddSheet(card);
   $("#scanone").onclick=()=>go("scan");
 }
@@ -541,6 +543,7 @@ function feedback(soft){try{if(navigator.vibrate)navigator.vibrate(soft?[20,40,2
 function updateLiveUI(){
   const ses=S.session;const sub=$("#v-scan .top .s");if(sub)sub.innerHTML=`Session · ${ses.length} added${S.review.length?` · <span style="color:var(--wn)">${S.review.length} to review</span>`:""}`;
   const es=$("#endses");if(es)es.disabled=!ses.length;
+  const sp=$("#sesprog");if(sp){const counts={};for(const s of ses)counts[s.set]=(counts[s.set]||0)+1;const top=Object.entries(counts).sort((a,b)=>b[1]-a[1])[0];if(top){const st=allSetStats().find(x=>x.code===top[0]);sp.hidden=!st;if(st)sp.innerHTML=`<button class="row" data-setprog="${st.code}" style="min-height:44px"><div class="tx"><div class="n">${esc(st.name)}</div><div class="bar" style="margin-top:5px"><i style="width:${100*st.owned/st.base}%"></i></div></div><span class="q own">${st.owned} / ${st.base}</span></button>`;const b=sp.querySelector("[data-setprog]");if(b)b.onclick=()=>go("checklist",{kind:"set",code:b.dataset.setprog});}else sp.hidden=true;}
   const tray=$("#livetray");if(tray){tray.innerHTML=[...ses].reverse().slice(0,12).map(s=>{const card=BY_ID[s.id];const p=card.prints.find(x=>x.set===s.set&&x.num===s.num);return `<button data-card="${esc(card.id)}" title="${esc(card.name)}">${thumb(card,"md","",p)}</button>`;}).join("")||'<div class="empty" style="padding:12px">Pan over your cards; each one lands here as it is read.</div>';tray.querySelectorAll("[data-card]").forEach(b=>b.onclick=()=>go("card",{id:b.dataset.card}));}
   const bd=$("#rvbadge");if(bd){bd.hidden=!S.review.length;bd.textContent=S.review.length;}
   const tr=$("#torev");if(tr){tr.hidden=!S.review.length;tr.textContent=`Review ${S.review.length} uncertain scan${S.review.length>1?"s":""}`;}
@@ -567,7 +570,7 @@ function rScan(){
       <div class="livehint" id="livehint">${ocrState==="ready"?"":"Starting the scanner…"}</div>
       ${scanning?'<div class="busy">Reading…</div>':""}
       <div class="ctl"><button class="btn ${live.on?"pri":""}" id="liveauto" aria-pressed="${live.on}">${live.on?"Auto: on":"Auto: off"}</button><button class="btn" id="capture" ${scanning?"disabled":""}>Capture</button><button class="btn" id="livesound" aria-pressed="${live.sound}" title="Sound">${live.sound?"Sound on":"Muted"}</button><button class="btn" id="camoff">Close</button></div></div>
-      <div class="h">This session</div><div class="tray" id="livetray"></div>`
+      <div class="h">This session</div><div id="sesprog" hidden></div><div class="tray" id="livetray"></div>`
   :`<div class="cam">${lastImg?`<img src="${lastImg}" alt="">`:""}<div class="guide" id="guide"></div>
     <div class="btnrow z" style="margin-top:0;width:100%;max-width:320px"><button class="btn pri" id="camon" ${scanning?"disabled":""}>${scanning?"Reading…":"Open camera"}</button><label class="btn" style="${scanning?"opacity:.5;pointer-events:none":""}"><input type="file" id="file" accept="image/*" capture="environment">Photo</label></div>
     <div class="z mono" id="ocrmsg" style="font-size:11px;color:var(--mu);min-height:14px">${scanning?esc(ocrMsg):ocrState==="ready"?"OCR ready":""}</div>
@@ -687,14 +690,86 @@ function rReview(){
 }
 
 /* ========================= BINDER ========================= */
-let binderTab="R",binderPage=0;
+let binderTab="R",binderPage=0,colSeg="binder",setFilter="",typeFilter="",showAllSets=false,showAllTypes=false;
+/* ========================= COLLECTION: SETS & TYPES =========================
+   A checklist is a set (slots = base-set collector numbers, one of each) or a creature type
+   (slots = cards with the type; makers = cards whose text names it). */
+let SETSTATS=null,TYPEIDX=null,CHANGELINGS=[];
+function baseSize(code){const s=SETS[code];if(!s)return 0;if(s[3])return s[3];let m=0;for(const c of INDEX)for(const p of c.prints)if(p.set===code&&p.n>m)m=p.n;return m;}
+function setSlots(code){const base=baseSize(code);const slots=new Map(),variants=[];
+  for(const c of INDEX)for(const p of c.prints){if(p.set!==code)continue;if(p.n>=1&&p.n<=base){if(!slots.has(p.n))slots.set(p.n,{card:c,print:p});}else variants.push({card:c,print:p});}
+  const arr=[...slots.values()].sort((a,b)=>a.print.n-b.print.n);variants.sort((a,b)=>(a.print.n||1e9)-(b.print.n||1e9)||String(a.print.num).localeCompare(String(b.print.num)));
+  return {base,slots:arr,variants};}
+function setChecklist(code){
+  const {base,slots,variants}=setSlots(code);
+  let owned=0,value=0,known=0;const byR={1:[0,0],2:[0,0],3:[0,0],4:[0,0],0:[0,0]};
+  for(const sl of slots){const n=ownedPrint(sl.card.id,sl.print.set,sl.print.num);sl.owned=n;const r=byR[sl.print.rarity]||byR[0];r[1]++;if(n){owned++;r[0]++;const v=priceOf(sl.print);if(v!=null){value+=v;known++;}}}
+  let vOwned=0;for(const v of variants){v.owned=ownedPrint(v.card.id,v.print.set,v.print.num);if(v.owned)vOwned++;}
+  return {kind:"set",code,name:setName(code),year:setYear(code),base,slots,variants,owned,total:slots.length,missing:slots.length-owned,value,known,byR,vOwned};}
+function buildTypeIndex(){
+  TYPEIDX=new Map();
+  const add=(t,c,makes)=>{let e=TYPEIDX.get(t);if(!e)TYPEIDX.set(t,e={has:[],makes:[]});(makes?e.makes:e.has).push(c);};
+  const count=new Map();for(const c of INDEX)if(c.types.includes("Creature")||c.types.includes("Kindred"))for(const t of c.sub)count.set(t,(count.get(t)||0)+1);
+  const types=new Set([...count.entries()].filter(([t,n])=>/^[A-Z][a-z'-]+$/.test(t)&&(n>=2||t.length>3)).map(([t])=>t));
+  for(const c of INDEX){const isCreature=c.types.includes("Creature")||c.types.includes("Kindred");if(isCreature)for(const t of c.sub)if(types.has(t))add(t,c,false);}
+  CHANGELINGS=INDEX.filter(c=>c.kw.includes("changeling")).sort((a,b)=>a.name.localeCompare(b.name));
+  for(const t of types){const re=new RegExp("\\b"+t.replace(/[-\/\\^$*+?.()|[\]{}]/g,"\\$&")+"s?\\b");const e=TYPEIDX.get(t);const inHas=new Set(e.has);for(const c of INDEX){if(inHas.has(c))continue;if(re.test(c.o)&&!(c.types.includes("Creature")&&c.sub.includes(t)))e.makes.push(c);}}
+  for(const [t,e] of TYPEIDX){e.has.sort((a,b)=>a.name.localeCompare(b.name));e.makes.sort((a,b)=>a.name.localeCompare(b.name));}
+}
+function typeChecklist(t){
+  if(!TYPEIDX)buildTypeIndex();const e=TYPEIDX.get(t);if(!e)return null;
+  const mk=c=>{const n=ownedOf(c.id);const op=n?ownedPrints(c.id)[0]:null;const print=op?c.prints.find(p=>p.set===op.set&&p.num===op.num):defaultPrint(c);return {card:c,print,owned:n};};
+  const has=e.has.map(mk),makes=e.makes.map(mk),changelings=CHANGELINGS.filter(c=>!c.sub.includes(t)).map(mk);
+  const owned=has.filter(x=>x.owned).length,mOwned=makes.filter(x=>x.owned).length,cOwned=changelings.filter(x=>x.owned).length;
+  let value=0,known=0;for(const x of [...has,...makes])if(x.owned){const v=entryValue(S.col[pk(x.card.id,x.print.set,x.print.num)]||{id:x.card.id,set:x.print.set,num:x.print.num,copies:[]});if(v){value+=v.total;known+=v.known;}}
+  return {kind:"type",code:t,name:t,slots:has,makes,changelings,owned,total:has.length,missing:has.length-owned,mOwned,cOwned,value,known};}
+function allSetStats(){
+  if(SETSTATS)return SETSTATS;
+  const ownedBySet={};for(const e of Object.values(S.col)){const c=BY_ID[e.id];const p=c.prints.find(x=>x.set===e.set&&x.num===e.num);if(!p)continue;const base=baseSize(e.set);const o=ownedBySet[e.set]=ownedBySet[e.set]||{slots:new Set(),variants:0,copies:0};o.copies+=e.copies.length;if(p.n>=1&&p.n<=base)o.slots.add(p.n);else o.variants++;}
+  SETSTATS=Object.keys(SETS).map(code=>{const o=ownedBySet[code];return {code,name:setName(code),year:setYear(code),base:baseSize(code),owned:o?o.slots.size:0,variants:o?o.variants:0,copies:o?o.copies:0,touched:(S.prefs&&S.prefs.touched&&S.prefs.touched[code])||0};}).filter(x=>x.base>0);
+  return SETSTATS;}
+function invalidateStats(){SETSTATS=null;}
+function touch(code){S.prefs=S.prefs||{};S.prefs.touched=S.prefs.touched||{};S.prefs.touched[code]=Date.now();save();invalidateStats();}
+function rSetList(el){
+  const all=allSetStats();const f=setFilter.trim().toLowerCase();
+  let list=all.filter(x=>!f||x.name.toLowerCase().includes(f)||x.code.includes(f));
+  const mine=list.filter(x=>x.owned||x.variants),rest=list.filter(x=>!x.owned&&!x.variants).sort((a,b)=>b.year.localeCompare(a.year)||a.name.localeCompare(b.name));
+  mine.sort((a,b)=>(b.touched-a.touched)||(b.owned-a.owned)||b.year.localeCompare(a.year));
+  const row=x=>`<button class="row setrow2" data-set="${x.code}" style="min-height:58px"><div class="tx"><div class="n">${esc(x.name)} <span class="mono mu" style="font-weight:400;font-size:12px">${x.code.toUpperCase()} · ${x.year}</span></div><div class="bar" style="margin-top:6px"><i style="width:${x.base?100*x.owned/x.base:0}%"></i></div></div><div style="text-align:right;min-width:72px"><div class="q ${x.owned?"own":""}" style="font-size:13px">${x.owned} / ${x.base}</div>${x.variants?`<div class="mu" style="font-size:11px">+${x.variants} variant${x.variants>1?"s":""}</div>`:""}</div></button>`;
+  el.innerHTML=`<div class="in" style="margin-bottom:6px"><span class="mu">⌕</span><input id="setf" placeholder="Filter sets by name or code" value="${esc(setFilter)}" autocomplete="off" autocapitalize="off"></div>
+  ${mine.length?`<div class="h">Your sets · ${mine.length}</div><div class="lst">${mine.map(row).join("")}</div>`:(f?"":'<div class="empty">No sets yet. Scan a card and its set appears here with a progress bar.</div>')}
+  ${rest.length?(showAllSets||f?`<div class="h">All sets · ${rest.length}</div><div class="lst">${rest.slice(0,showAllSets?rest.length:60).map(row).join("")}</div>`:`<button class="btn ghost" id="allsets" style="margin-top:12px">Show all ${rest.length} sets</button>`):""}`;
+  const inp=$("#setf");inp.oninput=()=>{setFilter=inp.value;const sel=inp.selectionStart;rBinder();const n=$("#setf");n.focus();n.setSelectionRange(sel,sel);};
+  el.querySelectorAll(".setrow2").forEach(b=>b.onclick=()=>go("checklist",{kind:"set",code:b.dataset.set}));
+  const a=$("#allsets");if(a)a.onclick=()=>{showAllSets=true;rBinder();};
+}
+function rTypeList(el){
+  if(!TYPEIDX)buildTypeIndex();const f=typeFilter.trim().toLowerCase();
+  const ownedNames=new Set(Object.values(S.col).map(e=>e.id));
+  const rows=[...TYPEIDX.entries()].map(([t,e])=>({t,n:e.has.length,m:e.makes.length,owned:e.has.filter(c=>ownedNames.has(c.id)).length,mOwned:e.makes.filter(c=>ownedNames.has(c.id)).length})).filter(x=>!f||x.t.toLowerCase().includes(f));
+  const mine=rows.filter(x=>x.owned||x.mOwned).sort((a,b)=>(b.owned-a.owned)||(b.mOwned-a.mOwned)||a.t.localeCompare(b.t)),rest=rows.filter(x=>!x.owned&&!x.mOwned).sort((a,b)=>a.t.localeCompare(b.t));
+  const row=x=>`<button class="row typerow" data-type="${esc(x.t)}" style="min-height:52px"><div class="tx"><div class="n">${esc(x.t)}</div><div class="d">${x.n} card${x.n===1?"":"s"} with the type${x.m?` · ${x.m} that make them`:""}</div></div><div style="text-align:right"><div class="q ${x.owned?"own":""}" style="font-size:13px">${x.owned} / ${x.n}</div>${x.mOwned?`<div class="mu" style="font-size:11px">+${x.mOwned} maker${x.mOwned>1?"s":""}</div>`:""}</div></button>`;
+  el.innerHTML=`<div class="in" style="margin-bottom:6px"><span class="mu">⌕</span><input id="typef" placeholder="Filter creature types" value="${esc(typeFilter)}" autocomplete="off" autocapitalize="off"></div>
+  ${mine.length?`<div class="h">Your types · ${mine.length}</div><div class="lst">${mine.map(row).join("")}</div>`:(f?"":'<div class="empty">No creature types yet. Each type you own a card of appears here with how many of its cards you have.</div>')}
+  ${rest.length?(showAllTypes||f?`<div class="h">All types · ${rest.length}</div><div class="lst">${rest.map(row).join("")}</div>`:`<button class="btn ghost" id="alltypes" style="margin-top:12px">Show all ${rest.length} creature types</button>`):""}`;
+  const inp=$("#typef");inp.oninput=()=>{typeFilter=inp.value;const sel=inp.selectionStart;rBinder();const n=$("#typef");n.focus();n.setSelectionRange(sel,sel);};
+  el.querySelectorAll(".typerow").forEach(b=>b.onclick=()=>go("checklist",{kind:"type",code:b.dataset.type}));
+  const a=$("#alltypes");if(a)a.onclick=()=>{showAllTypes=true;rBinder();};
+}
+function segBar(){return `<div class="seg" role="tablist">${[["binder","Binder"],["sets","Sets"],["types","Types"]].map(([k,l])=>`<button role="tab" aria-selected="${colSeg===k}" class="${colSeg===k?"on":""}" data-seg="${k}">${l}</button>`).join("")}</div>`;}
+function wireSeg(el){el.querySelectorAll("[data-seg]").forEach(b=>b.onclick=()=>{colSeg=b.dataset.seg;S.prefs=S.prefs||{};S.prefs.colSeg=colSeg;save();rBinder();});}
 function rBinder(){
   const el=$("#v-binder");
+  if(colSeg==="sets"||colSeg==="types"){
+    el.innerHTML=`<div class="top"><div><h1>Collection</h1><div class="s">${totalOwned()} cards · ${Object.keys(S.col).length} printings</div></div></div>${segBar()}<div id="segbody"></div>`;
+    wireSeg(el);(colSeg==="sets"?rSetList:rTypeList)($("#segbody"));return;
+  }
   const entries=Object.values(S.col).filter(e=>{const k=ciClass(BY_ID[e.id]);return binderTab==="M"?k==="M":k===binderTab;}).sort((a,b)=>BY_ID[a.id].name.localeCompare(BY_ID[b.id].name)||a.set.localeCompare(b.set));
   const pages=Math.max(1,Math.ceil(entries.length/9));binderPage=Math.min(binderPage,pages-1);
   const slice=entries.slice(binderPage*9,binderPage*9+9);
   const names={W:"White",U:"Blue",B:"Black",R:"Red",G:"Green",M:"Multi",C:"Colourless"};
-  el.innerHTML=`<div class="top"><div><h1>${names[binderTab]}</h1><div class="s">page ${binderPage+1} of ${pages} · ${entries.reduce((n,e)=>n+e.copies.length,0)} cards · ${totalOwned()} total</div></div></div>
+  el.innerHTML=`<div class="top"><div><h1>Collection</h1><div class="s">${names[binderTab]} · page ${binderPage+1} of ${pages} · ${entries.reduce((n,e)=>n+e.copies.length,0)} cards · ${totalOwned()} total</div></div></div>
+  ${segBar()}
   <div class="sidetabs">${["W","U","B","R","G","M","C"].map(x=>`<button class="${x===binderTab?"on":""}" data-bt="${x}">${x==="M"?'<span class="pips"><span class="pip R"></span><span class="pip W"></span></span>':x==="C"?'<span class="pip">C</span>':`<span class="pip ${x}"></span>`}</button>`).join("")}</div>
   <div class="grid3" id="bgrid">${slice.map(e=>{const card=BY_ID[e.id];const foil=e.copies.some(c=>c.foil);return `<button data-card="${esc(card.id)}" aria-label="${esc(card.name)}, ${pr(e)}, ${e.copies.length} owned">${thumb(card,"md",foil?'<span class="foil" title="foil"></span>':"")}<span class="lbl">${pr(e)} · <b>×${e.copies.length}</b>${(()=>{const v=entryValue(e);return v&&v.known?` · ${fmt(v.total)}`:"";})()}</span></button>`;}).join("")}${Array.from({length:9-slice.length}).map(()=>'<div class="card md ph" aria-hidden="true"><div class="art"></div></div>').join("")}</div>
   <div class="dots">${Array.from({length:Math.min(pages,40)}).map((_,i)=>`<i class="${i===binderPage?"on":""}"></i>`).join("")}</div>
@@ -707,8 +782,69 @@ function rBinder(){
   let x0=null;const g=$("#bgrid");
   g.addEventListener("touchstart",e=>{x0=e.touches[0].clientX;},{passive:true});
   g.addEventListener("touchend",e=>{if(x0==null)return;const dx=e.changedTouches[0].clientX-x0;x0=null;if(dx<-50&&binderPage<pages-1){binderPage++;rBinder();}else if(dx>50&&binderPage>0){binderPage--;rBinder();}},{passive:true});
-  el.querySelectorAll(".setrow").forEach(b=>b.onclick=()=>{q="e:"+b.dataset.set+" owned";colorF.clear();go("search");});
+  el.querySelectorAll(".setrow").forEach(b=>b.onclick=()=>go("checklist",{kind:"set",code:b.dataset.set}));
+  wireSeg(el);
 }
+
+/* ========================= CHECKLIST ========================= */
+let clState={chip:"all",rarity:null,group:"has",cols:3,sort:null,listMode:null};
+function milestone(cl){
+  if(cl.kind!=="set"||!cl.total)return "";const parts=[];
+  const names={4:"mythics",3:"rares",2:"uncommons",1:"commons"};
+  for(const r of [4,3,2,1]){const [o,t]=cl.byR[r]||[0,0];if(t&&o<t&&t-o<=5&&o>0){parts.push(`${t-o} more to finish the ${names[r]}`);break;}}
+  const pct=cl.owned/cl.total;for(const m of [.25,.5,.75,1]){if(pct<m){const need=Math.ceil(m*cl.total)-cl.owned;if(need>0)parts.push(`${need} more to ${Math.round(m*100)}%`);break;}}
+  if(cl.owned===cl.total)return "Complete.";
+  return parts.join(" · ");
+}
+function rChecklist(){
+  const el=$("#v-checklist");
+  const {kind,code}=curArg;const cl=kind==="set"?setChecklist(code):typeChecklist(code);
+  if(!cl){back();return;}
+  if(kind==="set")touch(code);
+  const st=clState;const listMode=st.listMode!=null?st.listMode:kind==="type";
+  if(kind==="type"&&st.autoGroupFor!==code){st.autoGroupFor=code;st.group=(cl.total<=2&&cl.makes.length>cl.total)?"makes":"has";st.chip="all";st.rarity=null;}
+  if(kind==="set"&&st.autoGroupFor!==code){st.autoGroupFor=code;st.chip="all";st.rarity=null;st.group="has";}
+  const pool=kind==="type"&&st.group==="makes"?cl.makes:kind==="type"&&st.group==="changelings"?cl.changelings:cl.slots;
+  let items=st.chip==="missing"?pool.filter(x=>!x.owned):st.chip==="owned"?pool.filter(x=>x.owned):st.chip==="variants"?cl.variants:pool;
+  if(st.rarity&&kind==="set")items=items.filter(x=>x.print.rarity===st.rarity);
+  const sort=st.sort||(kind==="set"?"number":"name");
+  items=[...items];
+  if(sort==="name")items.sort((a,b)=>a.card.name.localeCompare(b.card.name));
+  else if(sort==="price")items.sort((a,b)=>(priceOf(b.print)||0)-(priceOf(a.print)||0));
+  else if(sort==="rarity")items.sort((a,b)=>(b.print.rarity-a.print.rarity)||((a.print.n||0)-(b.print.n||0)));
+  const pct=cl.total?Math.round(100*cl.owned/cl.total):0;
+  const sub=kind==="set"?`${cl.code.toUpperCase()} · ${cl.year}`:`${cl.total} card${cl.total===1?"":"s"} with the type${cl.makes.length?` · ${cl.makes.length} that make them`:""}`;
+  const chips=kind==="set"?[["all","All",cl.total],["missing","Missing",cl.missing],["owned","Owned",cl.owned],["variants","Variants",cl.variants.length]]:[["all","All",pool.length],["missing","Missing",pool.filter(x=>!x.owned).length],["owned","Owned",pool.filter(x=>x.owned).length]];
+  const rar=kind==="set"?`<div class="chips" style="margin-top:6px">${[1,2,3,4].map(r=>{const [o,t]=cl.byR[r];return t?`<button class="chip ${st.rarity===r?"on":""}" data-rar="${r}">${RARITY[r][0].toUpperCase()} <span class="mu mono" style="font-size:11px">${o}/${t}</span></button>`:""}).join("")}<button class="chip" id="sortc">Sort: ${sort}</button><button class="chip" id="viewc">${listMode?"Grid":"List"}</button></div>`
+    :`<div class="chips" style="margin-top:6px"><button class="chip ${st.group==="has"?"on":""}" data-grp="has">Has the type ${cl.total}</button>${cl.makes.length?`<button class="chip ${st.group==="makes"?"on":""}" data-grp="makes">Makes them ${cl.makes.length}</button>`:""}${cl.changelings.length?`<button class="chip ${st.group==="changelings"?"on":""}" data-grp="changelings">Changelings ${cl.changelings.length}</button>`:""}<button class="chip" id="sortc">Sort: ${sort}</button><button class="chip" id="viewc">${listMode?"Grid":"List"}</button></div>`;
+  const ms=milestone(cl);
+  const cell=x=>{const own=x.owned;const v=priceOf(x.print);return `<button class="slot ${own?"own":"miss"}" data-card="${esc(x.card.id)}" data-set="${x.print.set}" data-num="${esc(x.print.num)}" aria-label="${esc(x.card.name)} ${pr(x.print)}${own?", "+own+" owned":", missing"}">${thumb(x.card,"md","",x.print)}<span class="num mono">${esc(String(x.print.num))}</span>${own?`<span class="cnt mono">×${own}</span>`:'<span class="addq" aria-hidden="true">+</span>'}${v!=null?`<span class="pr mono">${fmt(v)}</span>`:""}</button>`;};
+  const rowi=x=>{const own=x.owned;const v=priceOf(x.print);return `<div class="row ${own?"":"dim"}" style="min-height:52px"><button class="rowbtn" data-card="${esc(x.card.id)}">${stripe(x.card)}${thumb(x.card,"sm","",x.print)}<div class="tx"><div class="n">${esc(x.card.name)}</div><div class="d">${pr(x.print)} · ${RARITY[x.print.rarity]||""}${v!=null?` · <span class="mono" style="color:var(--fg)">${fmt(v)}</span>`:""}${kind==="type"&&x.card.prints.length>1?` · ${x.card.prints.length} printings`:""}</div></div></button>${own?`<span class="q own">×${own}</span>`:`<button class="plus" data-add="${esc(x.card.id)}|${x.print.set}|${esc(x.print.num)}" aria-label="Add ${esc(x.card.name)}">+</button>`}</div>`;};
+  el.innerHTML=`<div class="top"><button class="back" id="bk">‹ ${kind==="set"?"Sets":"Types"}</button><span class="mu" style="font-size:12px">${esc(sub)}</span></div>
+  <div style="font-weight:700;font-size:19px;line-height:1.15">${esc(cl.name)}</div>
+  <div style="display:flex;align-items:baseline;gap:8px;margin-top:6px"><span class="mono" style="font-size:30px;font-weight:700;line-height:1">${cl.owned}</span><span class="mu">of ${cl.total}</span><span class="mu mono" style="margin-left:auto">${pct}%</span></div>
+  <div class="bar" style="margin-top:8px"><i style="width:${pct}%"></i></div>
+  <div class="mu" style="font-size:12px;margin-top:6px">${cl.known?`worth ${fmt(cl.value)}${cl.known<cl.owned?" (partial)":""} · `:""}${cl.missing} missing${kind==="set"&&cl.vOwned?` · ${cl.vOwned} of ${cl.variants.length} variants`:""}${kind==="type"&&cl.mOwned?` · ${cl.mOwned} maker${cl.mOwned>1?"s":""} owned`:""}${kind==="type"&&cl.cOwned?` · ${cl.cOwned} changeling${cl.cOwned>1?"s":""} owned`:""}</div>
+  ${ms?`<div class="mu" style="font-size:12px;margin-top:2px">${esc(ms)}</div>`:""}
+  <div class="chips" style="margin-top:10px">${chips.map(([k,l,n])=>`<button class="chip ${st.chip===k?"on":""}" data-chip="${k}">${l} <span class="mono" style="font-size:11px;opacity:.8">${n}</span></button>`).join("")}</div>
+  ${rar}
+  ${items.length?(listMode?`<div class="lst" style="margin-top:8px">${items.map(rowi).join("")}</div>`:`<div class="slots cols${st.cols}" id="slots" style="margin-top:10px">${items.map(cell).join("")}</div>`):'<div class="empty">Nothing here with these filters.</div>'}`;
+  $("#bk").onclick=back;
+  el.querySelectorAll("[data-chip]").forEach(b=>b.onclick=()=>{st.chip=b.dataset.chip;rChecklist();});
+  el.querySelectorAll("[data-rar]").forEach(b=>b.onclick=()=>{st.rarity=st.rarity===+b.dataset.rar?null:+b.dataset.rar;rChecklist();});
+  el.querySelectorAll("[data-grp]").forEach(b=>b.onclick=()=>{st.group=b.dataset.grp;rChecklist();});
+  $("#sortc").onclick=()=>{const order=kind==="set"?["number","name","price","rarity"]:["name","price","rarity"];st.sort=order[(order.indexOf(sort)+1)%order.length];rChecklist();};
+  $("#viewc").onclick=()=>{st.listMode=!listMode;rChecklist();};
+  el.querySelectorAll(".slot").forEach(b=>{b.onclick=e=>{if(e.target.closest(".addq")){quickAdd(b.dataset.card,b.dataset.set,b.dataset.num);return;}go("card",{id:b.dataset.card});};});
+  el.querySelectorAll(".rowbtn").forEach(b=>b.onclick=()=>go("card",{id:b.dataset.card}));
+  el.querySelectorAll(".plus").forEach(b=>b.onclick=()=>{const [id,set,num]=b.dataset.add.split("|");quickAdd(id,set,num);});
+  // pinch to change columns
+  const g=$("#slots");if(g){let d0=null;g.addEventListener("touchstart",e=>{if(e.touches.length===2)d0=Math.hypot(e.touches[0].clientX-e.touches[1].clientX,e.touches[0].clientY-e.touches[1].clientY);},{passive:true});
+    g.addEventListener("touchmove",e=>{if(e.touches.length===2&&d0){const d=Math.hypot(e.touches[0].clientX-e.touches[1].clientX,e.touches[0].clientY-e.touches[1].clientY);if(d<d0*.8&&st.cols<6){st.cols++;d0=d;rChecklist();}else if(d>d0*1.25&&st.cols>3){st.cols--;d0=d;rChecklist();}}},{passive:true});}
+  wantPrices(items.slice(0,PRICE_BATCH).map(x=>x.print));
+}
+function quickAdd(id,set,num){const card=BY_ID[id];if(!card)return;addCopy(S.col,id,set,num,{cond:"NM",foil:false,via:"typed",date:today()});invalidateStats();save();rChecklist();
+  toast(`${card.name} · ${set.toUpperCase()} ${num} · now ×${ownedPrint(id,set,num)}`,()=>{const k=pk(id,set,num);const e=S.col[k];if(e){e.copies.pop();if(!e.copies.length)delete S.col[k];}invalidateStats();save();if(view==="checklist")rChecklist();});}
 
 /* ========================= DECKS ========================= */
 function parseDeck(text){
@@ -869,7 +1005,7 @@ async function restoreBackup(file){
   <div class="mu" style="font-size:12.5px;margin-top:4px">Backup from ${esc(data.at||"unknown date")} · ${n} cards · ${(st.decks||[]).length} decks. This replaces the ${totalOwned()} cards and ${S.decks.length} decks here now.</div>
   <div class="btnrow"><button class="btn ghost" id="rbcancel">Cancel</button><button class="btn pri" id="rbok">Replace and restore</button></div>`;
   $("#rbcancel").onclick=closeSheet;
-  $("#rbok").onclick=()=>{S=Object.assign(empty(),st);for(const k of Object.keys(S.col))if(!BY_ID[S.col[k].id])delete S.col[k];S.review=(S.review||[]).filter(r=>BY_ID[r.guess]);save();closeSheet();wantOwnedPrices();go("search");toast("Backup restored");};
+  $("#rbok").onclick=()=>{S=Object.assign(empty(),st);invalidateStats();for(const k of Object.keys(S.col))if(!BY_ID[S.col[k].id])delete S.col[k];S.review=(S.review||[]).filter(r=>BY_ID[r.guess]);save();closeSheet();wantOwnedPrices();go("search");toast("Backup restored");};
   openSheet();
 }
 
@@ -936,7 +1072,12 @@ function copyText(txt,msg){
   if(parts[0]==="card"&&BY_ID[parts.slice(1).join("/")]){view="card";curArg={id:parts.slice(1).join("/")};}
   if(parts[0]==="search"&&parts[1]){q=parts[1];}
   if(parts[0]==="review")view="review";
+  if(parts[0]==="set"&&SETS[parts[1]]){view="checklist";curArg={kind:"set",code:parts[1]};}
+  if(parts[0]==="type"&&parts[1]){if(!TYPEIDX)buildTypeIndex();const t=[...TYPEIDX.keys()].find(k=>k.toLowerCase()===parts[1].toLowerCase());if(t){view="checklist";curArg={kind:"type",code:t};}}
+  if(parts[0]==="sets"){view="binder";colSeg="sets";}if(parts[0]==="types"){view="binder";colSeg="types";}
+  if(S.prefs&&S.prefs.colSeg&&TABS.includes(view)&&view!=="binder")colSeg=S.prefs.colSeg;
   if(parts[0]==="deck"&&S.decks[0]){view="deck";curArg={id:S.decks[0].id};}
+  if(!$("#v-checklist")){const sec=document.createElement("section");sec.className="screen";sec.id="v-checklist";$("#tabbar").before(sec);}
   $("#tabbar").hidden=false;
   render();
   try{setupUpdates();}catch(e){}
@@ -946,7 +1087,7 @@ function copyText(txt,msg){
 })();
 /* After a deploy the old cached app runs once while the new service worker installs.
    When the new one takes over, reload once so the new build is what you see. */
-const APP_VERSION="20261017g";
+const APP_VERSION="20261018a";
 let swReg=null;
 function setupUpdates(){
   if(!("serviceWorker" in navigator))return;
