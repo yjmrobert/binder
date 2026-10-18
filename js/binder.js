@@ -438,7 +438,7 @@ async function getOCR(){
     const base=new URL("ocr/",document.baseURI).href;
     const init=Tesseract.createWorker("eng",1,{workerPath:base+"worker.min.js",corePath:base,langPath:base.replace(/\/$/,""),cacheMethod:"none",workerBlobURL:false,gzip:true,logger:ocrLog});
     const w=await Promise.race([init,new Promise((_,rej)=>setTimeout(()=>rej(new Error("OCR engine took too long to start")),90000))]);
-    ocrWorker=w;ocrState="ready";return w;
+    ocrWorker=w;ocrState="ready";ocrMsg="";const t=document.getElementById("ocrmsg");if(t)t.textContent="";return w;
   }catch(e){ocrState="failed";ocrErr=(e&&e.message)||String(e);return null;}
 }
 async function loadBitmap(file){
@@ -582,7 +582,7 @@ function closeCamera(){stopLive();cancelScan();if(stream){stream.getTracks().for
    card last added, the full-resolution guide crop goes to recognition. The result becomes a
    banner and a tray entry, never a sheet; uncertain matches go to the review queue. The next add
    is armed only once the region has changed substantially (card lifted, next one in). */
-let live={on:true,timer:null,prevGray:null,still:0,lastHash:null,lastGray:null,armed:true,busy:false,cooldownUntil:0,fails:0,sound:true,sharpHist:[],state:""};
+let live={on:true,timer:null,prevGray:null,still:0,lastHash:null,lastGray:null,armed:true,busy:false,cooldownUntil:0,fails:0,sound:true,sharpHist:[],state:"",hashes:[],presentSince:0,diag:""};
 /* The guide frame shows what the scanner is doing: seek (dashed), hold (solid white: a card is
    there, waiting for it to settle), read (amber pulse), ok / review (green / amber, with a
    full-screen flash so it registers without looking at the screen). */
@@ -604,7 +604,7 @@ function sampleGuide(v,g,w,h,keepColour){
 function dhash(cv){const t=document.createElement("canvas");t.width=9;t.height=8;t.getContext("2d").drawImage(cv,0,0,9,8);const d=t.getContext("2d").getImageData(0,0,9,8).data;const bits=[];for(let y=0;y<8;y++)for(let x=0;x<8;x++){const i=(y*9+x)*4,j=(y*9+x+1)*4;const a=d[i]*.3+d[i+1]*.59+d[i+2]*.11,b=d[j]*.3+d[j+1]*.59+d[j+2]*.11;bits.push(a>b?1:0);}return bits;}
 function hamming(a,b){if(!a||!b)return 64;let n=0;for(let i=0;i<64;i++)if(a[i]!==b[i])n++;return n;}
 function grayOf(cv){const d=cv.getContext("2d").getImageData(0,0,cv.width,cv.height).data;const g=new Float32Array(d.length/4);for(let i=0,j=0;i<d.length;i+=4,j++)g[j]=d[i]*.3+d[i+1]*.59+d[i+2]*.11;return g;}
-function startLive(){stopLive();live.prevGray=null;live.still=0;live.armed=true;live.lastHash=null;live.lastGray=null;live.fails=0;live.sharpHist=[];live.state="";setGuideState("seek");live.timer=setInterval(liveTick,120);}
+function startLive(){stopLive();live.prevGray=null;live.still=0;live.armed=true;live.lastHash=null;live.lastGray=null;live.fails=0;live.sharpHist=[];live.hashes=[];live.presentSince=0;live.state="";setGuideState("seek");live.timer=setInterval(liveTick,120);}
 function stopLive(){if(live.timer){clearInterval(live.timer);live.timer=null;}}
 async function liveTick(){
   if(!liveOn())return;
@@ -617,7 +617,11 @@ async function liveTick(){
   // Re-arm once the view has clearly changed from the card last added: hash distance or a
   // large mean difference against the sample taken at add time (flat frames hash alike).
   if(!live.armed&&live.lastGray){let d=0;for(let i=0;i<gray.length;i++)d+=Math.abs(gray[i]-live.lastGray[i]);d/=gray.length;if(hamming(hash,live.lastHash)>18||d>22){live.armed=true;live.fails=0;setLiveHint("");}}
-  if(motion<6)live.still++;else live.still=0;
+  // Stillness: raw pixel difference is swamped by hand jitter and sensor noise on many phones,
+  // so the difference hash (robust to both) decides; the pixel measure is kept as a fast path.
+  live.hashes.push(hash);if(live.hashes.length>4)live.hashes.shift();
+  const hashStable=live.hashes.length>=3&&hamming(hash,live.hashes[0])<=10;
+  if(motion<6||hashStable)live.still++;else live.still=0;
   if(live.busy)return;
   if(!live.armed){setGuideState("seek");return;}
   if(Date.now()<live.cooldownUntil)return;
@@ -626,10 +630,17 @@ async function liveTick(){
   // phone whose preview never reaches the old absolute bar still gets to try; OCR is the real test.
   live.sharpHist.push(q.sharp);if(live.sharpHist.length>25)live.sharpHist.shift();
   const peak=Math.max(...live.sharpHist);const need=Math.min(35,Math.max(12,peak*.5));
-  if(q.sharp<8){setGuideState("seek");setLiveHint("Looking for a card…");return;}
-  if(live.still<3){setGuideState("hold");setLiveHint("Hold still…");return;}
-  if(q.sharp<need){setGuideState("hold");setLiveHint("Hold still, a little closer");return;}
-  if(q.glare>.12){setGuideState("hold");setLiveHint("Glare on the card, tilt it");return;}
+  const now=Date.now();
+  if(q.sharp<8){live.presentSince=0;setGuideState("seek");setLiveHint("Looking for a card…"+diag(motion,q));return;}
+  if(!live.presentSince)live.presentSince=now;
+  // Fallback: a card has been in the frame for over a second but the gates never agreed; try anyway.
+  const overdue=now-live.presentSince>1200;
+  if(!overdue){
+    if(live.still<3){setGuideState("hold");setLiveHint("Hold still…"+diag(motion,q));return;}
+    if(q.sharp<need){setGuideState("hold");setLiveHint("Hold still, a little closer"+diag(motion,q));return;}
+    if(q.glare>.12){setGuideState("hold");setLiveHint("Glare on the card, tilt it"+diag(motion,q));return;}
+  }
+  live.presentSince=0;
   live.busy=true;setGuideState("read");setLiveHint("Reading…");
   try{
     const full=sampleGuide(v,g);
@@ -650,6 +661,7 @@ async function liveTick(){
   live.busy=false;
 }
 function setLiveHint(t){const h=$("#livehint");if(h)h.textContent=t;}
+function diag(motion,q){if(!(S.prefs&&S.prefs.diag))return "";return ` · m ${motion.toFixed(1)} s ${Math.round(q.sharp)} still ${live.still}`;}
 function liveBanner(r,kind){const b=$("#livebanner");if(!b)return;const card=BY_ID[r.guess];const p=card.prints.find(x=>x.set===r.print.set&&x.num===r.print.num);
   b.className="livebanner "+kind;b.innerHTML=`${thumb(card,"sm","",p)}<div class="tx"><div class="n">${esc(card.name)}${kind==="review"?"?":""}</div><div class="d">${pr(r.print)} · ${r.conf}%${kind==="ok"?` · now ×${ownedOf(card.id)}`:" · sent to review"}</div></div>${kind==="ok"?'<button class="btn sm" id="liveundo">Undo</button>':'<button class="btn sm" id="livefix">Fix</button>'}`;
   b.hidden=false;clearTimeout(b._t);b._t=setTimeout(()=>{b.hidden=true;},kind==="ok"?3500:6000);
@@ -1147,6 +1159,7 @@ function rMore(){
   <div class="note">Reset re-downloads the app, index and OCR engine on next load. Your collection stays.</div>
   ${ocrState==="idle"?'<button class="btn" id="warm" style="margin-top:10px">Start OCR engine now</button>':""}
   ${ocrState==="failed"?`<div class="sect warn" style="margin-top:10px;font-size:12.5px">${esc(ocrErr)}</div>`:""}
+  <div class="sect" style="margin-top:10px"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px"><div><div>Scanner diagnostics</div><div class="note" style="margin-top:2px">Shows motion, sharpness and stillness under the live hint. Useful when auto mode won't fire.</div></div><button class="chip ${S.prefs&&S.prefs.diag?"on":""}" id="diagtoggle" role="switch" aria-checked="${!!(S.prefs&&S.prefs.diag)}">${S.prefs&&S.prefs.diag?"On":"Off"}</button></div></div>
   <div class="h">Collection value</div>
   <div class="sect">${(()=>{const v=collectionValue();const h=S.hist||[];return `<div style="display:flex;justify-content:space-between;align-items:baseline"><span style="font-size:26px;font-weight:700" class="mono">${v.known?fmt(v.total):"—"}</span><span class="mu" style="font-size:12px">${v.known?`${v.known} of ${v.of} copies priced`:(v.of?"no prices yet":"no cards yet")}</span></div>
     ${h.length>1?sparkline(h):'<div class="note">A point is added each day the collection is fully priced; the line appears after the second day.</div>'}
@@ -1181,6 +1194,7 @@ function rMore(){
   $("#clearcache").onclick=async()=>{const b=$("#clearcache");b.disabled=true;b.textContent="Resetting…";try{if("serviceWorker" in navigator){const rs=await navigator.serviceWorker.getRegistrations();await Promise.all(rs.map(r=>r.unregister()));}if(window.caches){const ks=await caches.keys();await Promise.all(ks.map(k=>caches.delete(k)));}}catch(e){}location.reload();};
   $("#editbar").onclick=openPinEditor;
   $("#imgtoggle").onclick=()=>{S.prefs=S.prefs||{};S.prefs.images=!imagesOn();save();rMore();};
+  const dg=$("#diagtoggle");if(dg)dg.onclick=()=>{S.prefs=S.prefs||{};S.prefs.diag=!S.prefs.diag;save();rMore();};
   const wm=$("#warm");if(wm)wm.onclick=async()=>{wm.disabled=true;wm.textContent="Starting…";await getOCR();rMore();toast(ocrState==="ready"?"OCR ready":"OCR couldn't start");};
 }
 function copyText(txt,msg){
@@ -1217,7 +1231,7 @@ function copyText(txt,msg){
 })();
 /* After a deploy the old cached app runs once while the new service worker installs.
    When the new one takes over, reload once so the new build is what you see. */
-const APP_VERSION="20261018g";
+const APP_VERSION="20261018h";
 let swReg=null;
 function setupUpdates(){
   if(!("serviceWorker" in navigator))return;
