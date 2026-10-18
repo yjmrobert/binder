@@ -144,8 +144,101 @@ function rerender(){const a=document.activeElement;if(a&&/^(input|textarea)$/i.t
 
 /* ========================= NAV ========================= */
 let view="search",stack=[],curArg=null;
-const TABS=["search","scan","binder","decks","more"];
-const TABOF={card:"search",deck:"decks",review:"scan",setlist:"binder",typelist:"binder",checklist:"binder"};
+/* Destinations are flat peers. The bottom bar shows four pinned ones plus a tray that holds the
+   rest; the archetype picked on first open sets the pins, and the tray's editor changes them. */
+const DEST={
+  search:{label:"Search",icon:"search",render:()=>rSearch()},
+  scan:{label:"Scan",icon:"scan",render:()=>rScan()},
+  binder:{label:"Binder",icon:"binder",render:()=>rBinder()},
+  sets:{label:"Sets",icon:"sets",render:()=>rSets()},
+  types:{label:"Types",icon:"types",render:()=>rTypes()},
+  decks:{label:"Decks",icon:"decks",render:()=>rDecks()},
+  review:{label:"Review",icon:"review",render:()=>rReview()},
+  more:{label:"Settings",icon:"more",render:()=>rMore()},
+};
+const ARCHETYPES=[
+  {id:"collector",name:"Collector",blurb:"I chase sets, tribes and full binders.",pins:["sets","scan","types","search"]},
+  {id:"builder",name:"Deck builder",blurb:"I build Commander or Constructed decks from what I own.",pins:["decks","search","binder","scan"]},
+  {id:"player",name:"Player and trader",blurb:"I keep a pile, check prices and trade.",pins:["search","scan","binder","decks"]},
+];
+const DEFAULT_PINS=["search","scan","binder","decks"];
+const TABS=Object.keys(DEST);
+const TABOF={card:"search",deck:"decks",checklist:"sets"};
+function pins(){const p=(S&&S.prefs&&S.prefs.pins)||DEFAULT_PINS;return p.filter(k=>DEST[k]).slice(0,4);}
+function setPins(p){S.prefs=S.prefs||{};S.prefs.pins=p.slice(0,4);save();buildTabbar();}
+const ICONS={
+  search:'<circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/>',
+  scan:'<path d="M4 8V5.5A1.5 1.5 0 0 1 5.5 4H8M16 4h2.5A1.5 1.5 0 0 1 20 5.5V8M20 16v2.5a1.5 1.5 0 0 1-1.5 1.5H16M8 20H5.5A1.5 1.5 0 0 1 4 18.5V16"/><rect x="8.5" y="7" width="7" height="10" rx="1"/>',
+  binder:'<rect x="4" y="4" width="16" height="16" rx="2"/><path d="M4 12h16M12 4v16"/>',
+  sets:'<path d="M4 7.5h16M4 12h16M4 16.5h10"/><circle cx="18.5" cy="16.5" r="1.3" fill="currentColor"/>',
+  types:'<path d="M12 4l2.2 4.6 5 .7-3.6 3.5.9 5-4.5-2.4L7.5 17.8l.9-5L4.8 9.3l5-.7z"/>',
+  decks:'<rect x="6.5" y="3.5" width="11" height="15" rx="1.5"/><path d="M4.5 7.5v11A1.5 1.5 0 0 0 6 20h10"/>',
+  review:'<circle cx="12" cy="12" r="8"/><path d="M12 8v4.5M12 15.5v.5"/>',
+  more:'<circle cx="12" cy="6" r="1.3" fill="currentColor"/><circle cx="12" cy="12" r="1.3" fill="currentColor"/><circle cx="12" cy="18" r="1.3" fill="currentColor"/>',
+  tray:'<rect x="4" y="4" width="6.5" height="6.5" rx="1.5"/><rect x="13.5" y="4" width="6.5" height="6.5" rx="1.5"/><rect x="4" y="13.5" width="6.5" height="6.5" rx="1.5"/><rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.5"/>',
+};
+const svg=k=>`<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" width="24" height="24">${ICONS[k]}</svg>`;
+function badgeFor(k){if(k==="review"||k==="scan")return S.review.length;return 0;}
+function buildTabbar(){
+  const bar=$("#tabbar");const p=pins();
+  bar.innerHTML=p.map(k=>`<button data-tab="${k}" aria-label="${DEST[k].label}">${svg(DEST[k].icon)}<span>${DEST[k].label}</span><span class="badge" data-badge="${k}" hidden></span></button>`).join("")+`<button data-tab="tray" aria-label="More destinations" aria-haspopup="dialog">${svg("tray")}<span>More</span><span class="badge" data-badge="tray" hidden></span></button>`;
+  bar.querySelectorAll("[data-tab]").forEach(b=>b.onclick=()=>{if(b.dataset.tab==="tray")openTray();else go(b.dataset.tab);});
+  updateBadges();
+}
+function updateBadges(){
+  const p=pins();const n=S.review.length;
+  document.querySelectorAll("[data-badge]").forEach(b=>{const k=b.dataset.badge;let v=0;if(k==="review"||(k==="scan"&&!p.includes("review")))v=n;if(k==="tray"&&!p.includes("review")&&!p.includes("scan"))v=n;b.hidden=!v;b.textContent=v;});
+}
+function openTray(){
+  const p=pins();const rest=TABS.filter(k=>!p.includes(k));
+  $("#sheet").innerHTML=`<div class="grab"></div>
+  <div style="display:flex;align-items:center;justify-content:space-between"><div style="font-weight:700;font-size:17px">Everything</div><button class="btn sm" id="editpins">Edit bar</button></div>
+  <div class="traygrid">${rest.map(k=>`<button class="trayitem" data-go="${k}">${svg(DEST[k].icon)}<span>${DEST[k].label}</span>${badgeFor(k)&&k==="review"?`<span class="badge">${S.review.length}</span>`:""}</button>`).join("")}</div>
+`;
+  $("#sheet").querySelectorAll("[data-go]").forEach(b=>b.onclick=()=>{closeSheet();go(b.dataset.go);});
+  $("#editpins").onclick=()=>openPinEditor();
+  openSheet();
+}
+function openPinEditor(){
+  let p=pins().slice();
+  const draw=()=>{
+    const rest=TABS.filter(k=>!p.includes(k));
+    $("#sheet").innerHTML=`<div class="grab"></div>
+    <div style="font-weight:700;font-size:17px">Your bar</div>
+    <div class="note" style="margin-top:2px">Four pinned destinations. Tap one below to swap it in; use the arrows to reorder. The first one is your home screen.</div>
+    <div class="h">Pinned</div>
+    <div class="lst">${p.map((k,i)=>`<div class="row" style="min-height:48px">${svg(DEST[k].icon)}<div class="tx"><div class="n">${DEST[k].label}</div>${i===0?'<div class="d">Home</div>':""}</div><button class="iconbtn" data-up="${i}" ${i===0?"disabled":""} aria-label="Move up">↑</button><button class="iconbtn" data-down="${i}" ${i===p.length-1?"disabled":""} aria-label="Move down">↓</button></div>`).join("")}</div>
+    <div class="h">In the tray</div>
+    <div class="lst">${rest.map(k=>`<button class="row" data-swapin="${k}" style="min-height:48px">${svg(DEST[k].icon)}<div class="tx"><div class="n">${DEST[k].label}</div></div><span class="mu" style="font-size:12px">Pin</span></button>`).join("")}</div>
+    <div class="h">Presets</div>
+    <div class="chips" style="margin-top:0">${ARCHETYPES.map(a=>`<button class="chip" data-arch="${a.id}">${a.name}</button>`).join("")}</div>
+    <div class="btnrow"><button class="btn ghost" id="pincancel">Cancel</button><button class="btn pri" id="pinsave">Save</button></div>`;
+    const sh=$("#sheet");
+    sh.querySelectorAll("[data-up]").forEach(b=>b.onclick=()=>{const i=+b.dataset.up;[p[i-1],p[i]]=[p[i],p[i-1]];draw();});
+    sh.querySelectorAll("[data-down]").forEach(b=>b.onclick=()=>{const i=+b.dataset.down;[p[i+1],p[i]]=[p[i],p[i+1]];draw();});
+    sh.querySelectorAll("[data-swapin]").forEach(b=>b.onclick=()=>{openSwapPicker(b.dataset.swapin,p,draw);});
+    sh.querySelectorAll("[data-arch]").forEach(b=>b.onclick=()=>{p=ARCHETYPES.find(a=>a.id===b.dataset.arch).pins.slice();draw();});
+    $("#pincancel").onclick=()=>closeSheet();
+    $("#pinsave").onclick=()=>{setPins(p);closeSheet();render();toast("Bar updated");};
+  };
+  draw();openSheet();
+}
+function openSwapPicker(incoming,p,back){
+  $("#sheet").innerHTML=`<div class="grab"></div><div style="font-weight:700;font-size:17px">Pin ${DEST[incoming].label}</div><div class="note" style="margin-top:2px">Which pinned destination should it replace?</div>
+  <div class="lst" style="margin-top:8px">${p.map((k,i)=>`<button class="row" data-rep="${i}" style="min-height:48px">${svg(DEST[k].icon)}<div class="tx"><div class="n">${DEST[k].label}</div></div><span class="mu" style="font-size:12px">Replace</span></button>`).join("")}</div>
+  <button class="btn ghost" id="swapcancel" style="margin-top:10px">Back</button>`;
+  $("#sheet").querySelectorAll("[data-rep]").forEach(b=>b.onclick=()=>{p[+b.dataset.rep]=incoming;back();});
+  $("#swapcancel").onclick=back;
+}
+function rArchetype(){
+  const el=$("#v-archetype");
+  el.innerHTML=`<div class="arch">
+    <div class="arch-head"><b>Binder</b><div class="mu">How do you play Magic? This only sets which four things sit in the bottom bar. Everything else is the same, and you can change it any time.</div></div>
+    <div class="arch-list">${ARCHETYPES.map(a=>`<button class="arch-opt" data-arch="${a.id}"><div class="arch-name">${a.name}</div><div class="arch-blurb">${a.blurb}</div><div class="arch-bar">${a.pins.map(k=>`<span>${svg(DEST[k].icon)}${DEST[k].label}</span>`).join("")}</div></button>`).join("")}
+    <button class="arch-opt quiet" data-arch="custom"><div class="arch-name">Let me choose</div><div class="arch-blurb">Start with Search · Scan · Binder · Decks and edit the bar yourself.</div></button></div>
+  </div>`;
+  el.querySelectorAll("[data-arch]").forEach(b=>b.onclick=()=>{const a=ARCHETYPES.find(x=>x.id===b.dataset.arch);S.prefs=S.prefs||{};S.prefs.archetype=b.dataset.arch;S.prefs.pins=(a?a.pins:DEFAULT_PINS).slice();S.prefs.onboarded=true;save();buildTabbar();el.classList.remove("on");el.setAttribute("aria-hidden","true");$("#tabbar").hidden=false;view=pins()[0];render();});
+}
 /* Sub-screens push a history entry so the phone's back button (or Escape) returns from a card
    instead of leaving the app. Sheets do the same. */
 function go(v,arg){
@@ -155,20 +248,21 @@ function go(v,arg){
   view=v;curArg=arg;render();
 }
 function back(){if(stack.length&&history.state&&history.state.sub){history.back();return;}popView();}
-function popView(){const p=stack.pop();if(p){view=p.view;curArg=p.arg;}else{view="search";curArg=null;}render();}
+function popView(){const p=stack.pop();if(p){view=p.view;curArg=p.arg;}else{view=pins()[0];curArg=null;}render();}
 window.addEventListener("popstate",()=>{
   if($("#overlay").classList.contains("on")){closeSheet(true);return;}
   if(stack.length){popView();return;}
   const h=(location.hash||"").slice(1);if(TABS.includes(h)&&h!==view){view=h;curArg=null;render();}
 });
 document.addEventListener("keydown",e=>{if(e.key==="Escape"){if($("#overlay").classList.contains("on"))closeSheet();else if(stack.length)back();}});
-document.querySelectorAll("#tabbar button").forEach(b=>b.onclick=()=>go(b.dataset.tab));
 function render(){
   document.querySelectorAll(".screen").forEach(s=>{s.classList.remove("on");s.setAttribute("aria-hidden","true");});
-  const tab=TABS.includes(view)?view:(TABOF[view]||stack[0]?.view||"search");
-  document.querySelectorAll("#tabbar button").forEach(b=>{const on=b.dataset.tab===tab;b.classList.toggle("on",on);if(on)b.setAttribute("aria-current","page");else b.removeAttribute("aria-current");});
-  const bd=$("#rvbadge");bd.hidden=!S.review.length;bd.textContent=S.review.length;
-  ({search:rSearch,scan:rScan,binder:rBinder,decks:rDecks,card:rCard,deck:rDeck,review:rReview,more:rMore,checklist:rChecklist})[view]();
+  let tab=TABS.includes(view)?view:(TABOF[view]||stack[0]?.view||pins()[0]);
+  if(view==="checklist"&&curArg&&curArg.kind==="type")tab="types";
+  const p=pins();const barTab=p.includes(tab)?tab:"tray";
+  document.querySelectorAll("#tabbar button").forEach(b=>{const on=b.dataset.tab===barTab;b.classList.toggle("on",on);if(on)b.setAttribute("aria-current","page");else b.removeAttribute("aria-current");});
+  updateBadges();
+  const r=DEST[view]?DEST[view].render:({card:rCard,deck:rDeck,checklist:rChecklist})[view];r();
   const el=$("#v-"+view);el.classList.add("on");el.removeAttribute("aria-hidden");el.scrollTop=0;
 }
 
@@ -242,7 +336,7 @@ function rowCard(card){
   const own=ownedOf(card.id);const ops=own?ownedPrints(card.id):[];
   const where=own?pr(ops[0])+(ops.length>1?" +"+(ops.length-1)+" more":""):pr(defaultPrint(card))+(card.prints.length>1?" · "+card.prints.length+" printings":"");
   const sp=own?card.prints.find(x=>x.set===ops[0].set&&x.num===ops[0].num):null;const pv=sp?priceOf(sp,ops[0].copies.some(c=>c.foil)&&ops[0].copies.every(c=>c.foil)):null;
-  return `<button class="row ${own?"":"dim"}" data-card="${esc(card.id)}">${stripe(card)}${thumb(card,"sm")}<div class="tx"><div class="n">${esc(card.name)}</div><div class="d">${pips(card.cost)}<span>${esc(card.types.join(" "))} · ${where}</span></div></div><span class="q ${own?"own":""}">${own?"×"+own:"—"}${pv!=null?`<small>${fmt(pv)}</small>`:""}</span></button>`;
+  return `<button class="row ${own?"":"dim"}" data-card="${esc(card.id)}">${stripe(card)}${thumb(card,"sm")}<div class="tx"><div class="n">${esc(card.name)}</div><div class="d">${pips(card.cost)}<span>${esc(card.types.join(" "))} · ${where}</span></div></div><span class="q ${own?"own":""}">${own?"×"+own:"<span class='dash'>—</span>"}${pv!=null?`<small>${fmt(pv)}</small>`:""}</span></button>`;
 }
 
 /* ========================= CARD ========================= */
@@ -448,7 +542,7 @@ async function recognizeStub(file){
   const buf=file?new Uint8Array(await file.slice(0,65536).arrayBuffer()):crypto.getRandomValues(new Uint8Array(64));
   let h=2166136261;for(const b of buf){h^=b;h=Math.imul(h,16777619)>>>0;}
   const pool=INDEX.filter(x=>!x.sup.includes("Basic")&&x.prints.length>1);
-  const card=pool[h%pool.length];const print=card.prints[(h>>8)%card.prints.length];const conf=55+((h>>16)%43);
+  const card=pool[h%pool.length];const print=card.prints[((h>>>8)%card.prints.length+card.prints.length)%card.prints.length]||card.prints[0];const conf=55+((h>>>16)%43);
   const alts=card.prints.filter(p=>p!==print).slice(0,3).map((p,i)=>({id:card.id,set:p.set,num:p.num,conf:Math.max(20,conf-8-i*5)}));
   await new Promise(r=>setTimeout(r,400));
   return {guess:card.id,print:{set:print.set,num:print.num},conf,alts,how:"demo"};
@@ -545,7 +639,7 @@ function updateLiveUI(){
   const es=$("#endses");if(es)es.disabled=!ses.length;
   const sp=$("#sesprog");if(sp){const counts={};for(const s of ses)counts[s.set]=(counts[s.set]||0)+1;const top=Object.entries(counts).sort((a,b)=>b[1]-a[1])[0];if(top){const st=allSetStats().find(x=>x.code===top[0]);sp.hidden=!st;if(st)sp.innerHTML=`<button class="row" data-setprog="${st.code}" style="min-height:44px"><div class="tx"><div class="n">${esc(st.name)}</div><div class="bar" style="margin-top:5px"><i style="width:${100*st.owned/st.base}%"></i></div></div><span class="q own">${st.owned} / ${st.base}</span></button>`;const b=sp.querySelector("[data-setprog]");if(b)b.onclick=()=>go("checklist",{kind:"set",code:b.dataset.setprog});}else sp.hidden=true;}
   const tray=$("#livetray");if(tray){tray.innerHTML=[...ses].reverse().slice(0,12).map(s=>{const card=BY_ID[s.id];const p=card.prints.find(x=>x.set===s.set&&x.num===s.num);return `<button data-card="${esc(card.id)}" title="${esc(card.name)}">${thumb(card,"md","",p)}</button>`;}).join("")||'<div class="empty" style="padding:12px">Pan over your cards; each one lands here as it is read.</div>';tray.querySelectorAll("[data-card]").forEach(b=>b.onclick=()=>go("card",{id:b.dataset.card}));}
-  const bd=$("#rvbadge");if(bd){bd.hidden=!S.review.length;bd.textContent=S.review.length;}
+  updateBadges();
   const tr=$("#torev");if(tr){tr.hidden=!S.review.length;tr.textContent=`Review ${S.review.length} uncertain scan${S.review.length>1?"s":""}`;}
 }
 async function captureFrame(){
@@ -679,18 +773,18 @@ function openTypeSheet(onPick){
 function rReview(){
   const el=$("#v-review");
   const items=[...S.review].sort((a,b)=>a.conf-b.conf);
-  el.innerHTML=`<div class="top"><button class="back" id="bk">‹ Scan</button><div class="s">${items.length} uncertain · lowest first</div></div>
+  el.innerHTML=`<div class="top"><div><h1>Review</h1><div class="s">${items.length} uncertain · lowest first</div></div>${pins().includes("review")?"":'<button class="btn sm" id="bk">Scan</button>'}</div>
   ${items.length?`<div class="lst">${items.map(r=>{const card=BY_ID[r.guess];return `<button class="row" data-rv="${r.id}" style="min-height:60px"><div class="crop" style="width:34px;height:48px;border-radius:4px">${r.img?`<img src="${r.img}" alt="">`:""}</div><div class="tx"><div class="n">${esc(card.name)}?</div><div class="meter" style="margin-top:4px"><span>${r.conf}%</span><div class="conf ${r.conf>=40?"wn":"bad"}"><i style="width:${r.conf}%"></i></div><span class="mono">${r.print.set.toUpperCase()} ${esc(r.print.num)}</span></div></div><span class="mu">›</span></button>`;}).join("")}</div>
   <div class="note">Most of these are the right name with an uncertain printing; the sheet groups same-name candidates so set is the only decision.</div>
   <button class="btn" id="acceptall" style="margin-top:12px">Accept all ≥ 70%</button>`
   :`<div class="empty">Nothing to review. Scans below ${THRESHOLD}% confidence land here.</div>`}`;
-  $("#bk").onclick=()=>go("scan");
+  const bk=$("#bk");if(bk)bk.onclick=()=>go("scan");
   el.querySelectorAll("[data-rv]").forEach(b=>b.onclick=()=>{const r=S.review.find(x=>x.id===b.dataset.rv);openMatchSheet(r,true);});
   const aa=$("#acceptall");if(aa)aa.onclick=()=>{const ok=S.review.filter(r=>r.conf>=70);ok.forEach(r=>commitScan({guess:r.guess,print:r.print,conf:r.conf}));S.review=S.review.filter(r=>r.conf<70);save();render();toast(`Accepted ${ok.length}`);};
 }
 
 /* ========================= BINDER ========================= */
-let binderTab="R",binderPage=0,colSeg="binder",setFilter="",typeFilter="",showAllSets=false,showAllTypes=false;
+let binderTab="R",binderPage=0,setFilter="",typeFilter="",showAllSets=false,showAllTypes=false;
 /* ========================= COLLECTION: SETS & TYPES =========================
    A checklist is a set (slots = base-set collector numbers, one of each) or a creature type
    (slots = cards with the type; makers = cards whose text names it). */
@@ -735,41 +829,36 @@ function rSetList(el){
   let list=all.filter(x=>!f||x.name.toLowerCase().includes(f)||x.code.includes(f));
   const mine=list.filter(x=>x.owned||x.variants),rest=list.filter(x=>!x.owned&&!x.variants).sort((a,b)=>b.year.localeCompare(a.year)||a.name.localeCompare(b.name));
   mine.sort((a,b)=>(b.touched-a.touched)||(b.owned-a.owned)||b.year.localeCompare(a.year));
-  const row=x=>`<button class="row setrow2" data-set="${x.code}" style="min-height:58px"><div class="tx"><div class="n">${esc(x.name)} <span class="mono mu" style="font-weight:400;font-size:12px">${x.code.toUpperCase()} · ${x.year}</span></div><div class="bar" style="margin-top:6px"><i style="width:${x.base?100*x.owned/x.base:0}%"></i></div></div><div style="text-align:right;min-width:72px"><div class="q ${x.owned?"own":""}" style="font-size:13px">${x.owned} / ${x.base}</div>${x.variants?`<div class="mu" style="font-size:11px">+${x.variants} variant${x.variants>1?"s":""}</div>`:""}</div></button>`;
+  const row=x=>`<button class="row setrow2" data-set="${x.code}"><div class="tx"><div class="n">${esc(x.name)}</div><div class="d"><span class="mono">${x.code.toUpperCase()}</span><span>${x.year}</span>${x.variants?`<span>+${x.variants} variant${x.variants>1?"s":""}</span>`:""}</div><div class="bar"><i style="width:${x.base?100*x.owned/x.base:0}%"></i></div></div><div class="frac ${x.owned?"own":""}"><b>${x.owned}</b><span>/ ${x.base}</span></div></button>`;
   el.innerHTML=`<div class="in" style="margin-bottom:6px"><span class="mu">⌕</span><input id="setf" placeholder="Filter sets by name or code" value="${esc(setFilter)}" autocomplete="off" autocapitalize="off"></div>
   ${mine.length?`<div class="h">Your sets · ${mine.length}</div><div class="lst">${mine.map(row).join("")}</div>`:(f?"":'<div class="empty">No sets yet. Scan a card and its set appears here with a progress bar.</div>')}
   ${rest.length?(showAllSets||f?`<div class="h">All sets · ${rest.length}</div><div class="lst">${rest.slice(0,showAllSets?rest.length:60).map(row).join("")}</div>`:`<button class="btn ghost" id="allsets" style="margin-top:12px">Show all ${rest.length} sets</button>`):""}`;
-  const inp=$("#setf");inp.oninput=()=>{setFilter=inp.value;const sel=inp.selectionStart;rBinder();const n=$("#setf");n.focus();n.setSelectionRange(sel,sel);};
+  const inp=$("#setf");inp.oninput=()=>{setFilter=inp.value;const sel=inp.selectionStart;rSets();const n=$("#setf");n.focus();n.setSelectionRange(sel,sel);};
   el.querySelectorAll(".setrow2").forEach(b=>b.onclick=()=>go("checklist",{kind:"set",code:b.dataset.set}));
-  const a=$("#allsets");if(a)a.onclick=()=>{showAllSets=true;rBinder();};
+  const a=$("#allsets");if(a)a.onclick=()=>{showAllSets=true;rSets();};
 }
 function rTypeList(el){
   if(!TYPEIDX)buildTypeIndex();const f=typeFilter.trim().toLowerCase();
   const ownedNames=new Set(Object.values(S.col).map(e=>e.id));
   const rows=[...TYPEIDX.entries()].map(([t,e])=>({t,n:e.has.length,m:e.makes.length,owned:e.has.filter(c=>ownedNames.has(c.id)).length,mOwned:e.makes.filter(c=>ownedNames.has(c.id)).length})).filter(x=>!f||x.t.toLowerCase().includes(f));
   const mine=rows.filter(x=>x.owned||x.mOwned).sort((a,b)=>(b.owned-a.owned)||(b.mOwned-a.mOwned)||a.t.localeCompare(b.t)),rest=rows.filter(x=>!x.owned&&!x.mOwned).sort((a,b)=>a.t.localeCompare(b.t));
-  const row=x=>`<button class="row typerow" data-type="${esc(x.t)}" style="min-height:52px"><div class="tx"><div class="n">${esc(x.t)}</div><div class="d">${x.n} card${x.n===1?"":"s"} with the type${x.m?` · ${x.m} that make them`:""}</div></div><div style="text-align:right"><div class="q ${x.owned?"own":""}" style="font-size:13px">${x.owned} / ${x.n}</div>${x.mOwned?`<div class="mu" style="font-size:11px">+${x.mOwned} maker${x.mOwned>1?"s":""}</div>`:""}</div></button>`;
+  const row=x=>`<button class="row typerow" data-type="${esc(x.t)}"><div class="tx"><div class="n">${esc(x.t)}</div><div class="d"><span>${x.n} with the type</span>${x.m?`<span>${x.m} make them</span>`:""}${x.mOwned?`<span>${x.mOwned} maker${x.mOwned>1?"s":""} owned</span>`:""}</div></div><div class="frac ${x.owned?"own":""}"><b>${x.owned}</b><span>/ ${x.n}</span></div></button>`;
   el.innerHTML=`<div class="in" style="margin-bottom:6px"><span class="mu">⌕</span><input id="typef" placeholder="Filter creature types" value="${esc(typeFilter)}" autocomplete="off" autocapitalize="off"></div>
   ${mine.length?`<div class="h">Your types · ${mine.length}</div><div class="lst">${mine.map(row).join("")}</div>`:(f?"":'<div class="empty">No creature types yet. Each type you own a card of appears here with how many of its cards you have.</div>')}
   ${rest.length?(showAllTypes||f?`<div class="h">All types · ${rest.length}</div><div class="lst">${rest.map(row).join("")}</div>`:`<button class="btn ghost" id="alltypes" style="margin-top:12px">Show all ${rest.length} creature types</button>`):""}`;
-  const inp=$("#typef");inp.oninput=()=>{typeFilter=inp.value;const sel=inp.selectionStart;rBinder();const n=$("#typef");n.focus();n.setSelectionRange(sel,sel);};
+  const inp=$("#typef");inp.oninput=()=>{typeFilter=inp.value;const sel=inp.selectionStart;rTypes();const n=$("#typef");n.focus();n.setSelectionRange(sel,sel);};
   el.querySelectorAll(".typerow").forEach(b=>b.onclick=()=>go("checklist",{kind:"type",code:b.dataset.type}));
-  const a=$("#alltypes");if(a)a.onclick=()=>{showAllTypes=true;rBinder();};
+  const a=$("#alltypes");if(a)a.onclick=()=>{showAllTypes=true;rTypes();};
 }
-function segBar(){return `<div class="seg" role="tablist">${[["binder","Binder"],["sets","Sets"],["types","Types"]].map(([k,l])=>`<button role="tab" aria-selected="${colSeg===k}" class="${colSeg===k?"on":""}" data-seg="${k}">${l}</button>`).join("")}</div>`;}
-function wireSeg(el){el.querySelectorAll("[data-seg]").forEach(b=>b.onclick=()=>{colSeg=b.dataset.seg;S.prefs=S.prefs||{};S.prefs.colSeg=colSeg;save();rBinder();});}
+function rSets(){const el=$("#v-sets");el.innerHTML=`<div class="top"><div><h1>Sets</h1><div class="s">${allSetStats().filter(x=>x.owned||x.variants).length} with cards · ${Object.keys(SETS).length} in the index</div></div></div><div id="segbody"></div>`;rSetList($("#segbody"));}
+function rTypes(){if(!TYPEIDX)buildTypeIndex();const el=$("#v-types");const ownedNames=new Set(Object.values(S.col).map(e=>e.id));const n=[...TYPEIDX.values()].filter(e=>e.has.some(c=>ownedNames.has(c.id))).length;el.innerHTML=`<div class="top"><div><h1>Creature types</h1><div class="s">${n} with cards · ${TYPEIDX.size} in the index</div></div></div><div id="segbody"></div>`;rTypeList($("#segbody"));}
 function rBinder(){
   const el=$("#v-binder");
-  if(colSeg==="sets"||colSeg==="types"){
-    el.innerHTML=`<div class="top"><div><h1>Collection</h1><div class="s">${totalOwned()} cards · ${Object.keys(S.col).length} printings</div></div></div>${segBar()}<div id="segbody"></div>`;
-    wireSeg(el);(colSeg==="sets"?rSetList:rTypeList)($("#segbody"));return;
-  }
   const entries=Object.values(S.col).filter(e=>{const k=ciClass(BY_ID[e.id]);return binderTab==="M"?k==="M":k===binderTab;}).sort((a,b)=>BY_ID[a.id].name.localeCompare(BY_ID[b.id].name)||a.set.localeCompare(b.set));
   const pages=Math.max(1,Math.ceil(entries.length/9));binderPage=Math.min(binderPage,pages-1);
   const slice=entries.slice(binderPage*9,binderPage*9+9);
   const names={W:"White",U:"Blue",B:"Black",R:"Red",G:"Green",M:"Multi",C:"Colourless"};
-  el.innerHTML=`<div class="top"><div><h1>Collection</h1><div class="s">${names[binderTab]} · page ${binderPage+1} of ${pages} · ${entries.reduce((n,e)=>n+e.copies.length,0)} cards · ${totalOwned()} total</div></div></div>
-  ${segBar()}
+  el.innerHTML=`<div class="top"><div><h1>Binder</h1><div class="s">${names[binderTab]} · page ${binderPage+1} of ${pages} · ${entries.reduce((n,e)=>n+e.copies.length,0)} cards · ${totalOwned()} total</div></div></div>
   <div class="sidetabs">${["W","U","B","R","G","M","C"].map(x=>`<button class="${x===binderTab?"on":""}" data-bt="${x}">${x==="M"?'<span class="pips"><span class="pip R"></span><span class="pip W"></span></span>':x==="C"?'<span class="pip">C</span>':`<span class="pip ${x}"></span>`}</button>`).join("")}</div>
   <div class="grid3" id="bgrid">${slice.map(e=>{const card=BY_ID[e.id];const foil=e.copies.some(c=>c.foil);return `<button data-card="${esc(card.id)}" aria-label="${esc(card.name)}, ${pr(e)}, ${e.copies.length} owned">${thumb(card,"md",foil?'<span class="foil" title="foil"></span>':"")}<span class="lbl">${pr(e)} · <b>×${e.copies.length}</b>${(()=>{const v=entryValue(e);return v&&v.known?` · ${fmt(v.total)}`:"";})()}</span></button>`;}).join("")}${Array.from({length:9-slice.length}).map(()=>'<div class="card md ph" aria-hidden="true"><div class="art"></div></div>').join("")}</div>
   <div class="dots">${Array.from({length:Math.min(pages,40)}).map((_,i)=>`<i class="${i===binderPage?"on":""}"></i>`).join("")}</div>
@@ -783,7 +872,6 @@ function rBinder(){
   g.addEventListener("touchstart",e=>{x0=e.touches[0].clientX;},{passive:true});
   g.addEventListener("touchend",e=>{if(x0==null)return;const dx=e.changedTouches[0].clientX-x0;x0=null;if(dx<-50&&binderPage<pages-1){binderPage++;rBinder();}else if(dx>50&&binderPage>0){binderPage--;rBinder();}},{passive:true});
   el.querySelectorAll(".setrow").forEach(b=>b.onclick=()=>go("checklist",{kind:"set",code:b.dataset.set}));
-  wireSeg(el);
 }
 
 /* ========================= CHECKLIST ========================= */
@@ -815,21 +903,21 @@ function rChecklist(){
   const pct=cl.total?Math.round(100*cl.owned/cl.total):0;
   const sub=kind==="set"?`${cl.code.toUpperCase()} · ${cl.year}`:`${cl.total} card${cl.total===1?"":"s"} with the type${cl.makes.length?` · ${cl.makes.length} that make them`:""}`;
   const chips=kind==="set"?[["all","All",cl.total],["missing","Missing",cl.missing],["owned","Owned",cl.owned],["variants","Variants",cl.variants.length]]:[["all","All",pool.length],["missing","Missing",pool.filter(x=>!x.owned).length],["owned","Owned",pool.filter(x=>x.owned).length]];
-  const rar=kind==="set"?`<div class="chips" style="margin-top:6px">${[1,2,3,4].map(r=>{const [o,t]=cl.byR[r];return t?`<button class="chip ${st.rarity===r?"on":""}" data-rar="${r}">${RARITY[r][0].toUpperCase()} <span class="mu mono" style="font-size:11px">${o}/${t}</span></button>`:""}).join("")}<button class="chip" id="sortc">Sort: ${sort}</button><button class="chip" id="viewc">${listMode?"Grid":"List"}</button></div>`
-    :`<div class="chips" style="margin-top:6px"><button class="chip ${st.group==="has"?"on":""}" data-grp="has">Has the type ${cl.total}</button>${cl.makes.length?`<button class="chip ${st.group==="makes"?"on":""}" data-grp="makes">Makes them ${cl.makes.length}</button>`:""}${cl.changelings.length?`<button class="chip ${st.group==="changelings"?"on":""}" data-grp="changelings">Changelings ${cl.changelings.length}</button>`:""}<button class="chip" id="sortc">Sort: ${sort}</button><button class="chip" id="viewc">${listMode?"Grid":"List"}</button></div>`;
+  const rar=kind==="set"?`<div class="chips rail" style="margin-top:6px">${[1,2,3,4].map(r=>{const [o,t]=cl.byR[r];return t?`<button class="chip ${st.rarity===r?"on":""}" data-rar="${r}">${RARITY[r][0].toUpperCase()} <span class="mono cnt">${o}/${t}</span></button>`:""}).join("")}<span class="chipgap"></span><button class="chip" id="sortc">Sort: ${sort}</button><button class="chip" id="viewc">${listMode?"Grid":"List"}</button></div>`
+    :`<div class="chips rail" style="margin-top:6px"><button class="chip ${st.group==="has"?"on":""}" data-grp="has">Has the type <span class="mono cnt">${cl.total}</span></button>${cl.makes.length?`<button class="chip ${st.group==="makes"?"on":""}" data-grp="makes">Makes them <span class="mono cnt">${cl.makes.length}</span></button>`:""}${cl.changelings.length?`<button class="chip ${st.group==="changelings"?"on":""}" data-grp="changelings">Changelings <span class="mono cnt">${cl.changelings.length}</span></button>`:""}<span class="chipgap"></span><button class="chip" id="sortc">Sort: ${sort}</button><button class="chip" id="viewc">${listMode?"Grid":"List"}</button></div>`;
   const ms=milestone(cl);
-  const cell=x=>{const own=x.owned;const v=priceOf(x.print);return `<button class="slot ${own?"own":"miss"}" data-card="${esc(x.card.id)}" data-set="${x.print.set}" data-num="${esc(x.print.num)}" aria-label="${esc(x.card.name)} ${pr(x.print)}${own?", "+own+" owned":", missing"}">${thumb(x.card,"md","",x.print)}<span class="num mono">${esc(String(x.print.num))}</span>${own?`<span class="cnt mono">×${own}</span>`:'<span class="addq" aria-hidden="true">+</span>'}${v!=null?`<span class="pr mono">${fmt(v)}</span>`:""}</button>`;};
+  const cell=x=>{const own=x.owned;const v=priceOf(x.print);return `<button class="slot ${own?"own":"miss"}" data-card="${esc(x.card.id)}" data-set="${x.print.set}" data-num="${esc(x.print.num)}" aria-label="${esc(x.card.name)} ${pr(x.print)}${own?", "+own+" owned":", missing"}">${thumb(x.card,"md","",x.print)}${own?`<span class="cnt mono">×${own}</span>`:'<span class="addq" aria-hidden="true">+</span>'}<span class="under"><span class="num mono">${esc(String(x.print.num))}</span>${v!=null?`<span class="pr mono">${fmt(v)}</span>`:""}</span></button>`;};
   const rowi=x=>{const own=x.owned;const v=priceOf(x.print);return `<div class="row ${own?"":"dim"}" style="min-height:52px"><button class="rowbtn" data-card="${esc(x.card.id)}">${stripe(x.card)}${thumb(x.card,"sm","",x.print)}<div class="tx"><div class="n">${esc(x.card.name)}</div><div class="d">${pr(x.print)} · ${RARITY[x.print.rarity]||""}${v!=null?` · <span class="mono" style="color:var(--fg)">${fmt(v)}</span>`:""}${kind==="type"&&x.card.prints.length>1?` · ${x.card.prints.length} printings`:""}</div></div></button>${own?`<span class="q own">×${own}</span>`:`<button class="plus" data-add="${esc(x.card.id)}|${x.print.set}|${esc(x.print.num)}" aria-label="Add ${esc(x.card.name)}">+</button>`}</div>`;};
-  el.innerHTML=`<div class="top"><button class="back" id="bk">‹ ${kind==="set"?"Sets":"Types"}</button><span class="mu" style="font-size:12px">${esc(sub)}</span></div>
-  <div style="font-weight:700;font-size:19px;line-height:1.15">${esc(cl.name)}</div>
-  <div style="display:flex;align-items:baseline;gap:8px;margin-top:6px"><span class="mono" style="font-size:30px;font-weight:700;line-height:1">${cl.owned}</span><span class="mu">of ${cl.total}</span><span class="mu mono" style="margin-left:auto">${pct}%</span></div>
+  el.innerHTML=`<div class="top"><button class="back" id="bk">‹ ${stack.length?(DEST[stack[stack.length-1].view]||{label:"Back"}).label:(kind==="set"?"Sets":"Types")}</button><span class="mu" style="font-size:12px">${esc(sub)}</span></div>
+  <h2 class="title">${esc(cl.name)}</h2>
+  <div class="bignum"><span class="mono">${cl.owned}</span><span class="mu">of ${cl.total}</span><span class="mu mono" style="margin-left:auto">${pct}%</span></div>
   <div class="bar" style="margin-top:8px"><i style="width:${pct}%"></i></div>
   <div class="mu" style="font-size:12px;margin-top:6px">${cl.known?`worth ${fmt(cl.value)}${cl.known<cl.owned?" (partial)":""} · `:""}${cl.missing} missing${kind==="set"&&cl.vOwned?` · ${cl.vOwned} of ${cl.variants.length} variants`:""}${kind==="type"&&cl.mOwned?` · ${cl.mOwned} maker${cl.mOwned>1?"s":""} owned`:""}${kind==="type"&&cl.cOwned?` · ${cl.cOwned} changeling${cl.cOwned>1?"s":""} owned`:""}</div>
   ${ms?`<div class="mu" style="font-size:12px;margin-top:2px">${esc(ms)}</div>`:""}
-  <div class="chips" style="margin-top:10px">${chips.map(([k,l,n])=>`<button class="chip ${st.chip===k?"on":""}" data-chip="${k}">${l} <span class="mono" style="font-size:11px;opacity:.8">${n}</span></button>`).join("")}</div>
+  <div class="chips rail" style="margin-top:12px">${chips.map(([k,l,n])=>`<button class="chip ${st.chip===k?"on":""}" data-chip="${k}">${l} <span class="mono cnt">${n}</span></button>`).join("")}</div>
   ${rar}
   ${items.length?(listMode?`<div class="lst" style="margin-top:8px">${items.map(rowi).join("")}</div>`:`<div class="slots cols${st.cols}" id="slots" style="margin-top:10px">${items.map(cell).join("")}</div>`):'<div class="empty">Nothing here with these filters.</div>'}`;
-  $("#bk").onclick=back;
+  $("#bk").onclick=()=>{if(stack.length)back();else go(kind==="set"?"sets":"types");};
   el.querySelectorAll("[data-chip]").forEach(b=>b.onclick=()=>{st.chip=b.dataset.chip;rChecklist();});
   el.querySelectorAll("[data-rar]").forEach(b=>b.onclick=()=>{st.rarity=st.rarity===+b.dataset.rar?null:+b.dataset.rar;rChecklist();});
   el.querySelectorAll("[data-grp]").forEach(b=>b.onclick=()=>{st.group=b.dataset.grp;rChecklist();});
@@ -861,7 +949,7 @@ function deckStats(d){let need=0,have=0;for(const l of d.lines){need+=l.qty;have
 function rDecks(){
   const el=$("#v-decks");
   el.innerHTML=`<div class="top"><h1>Decks</h1><button class="btn sm pri" id="paste">Paste list</button></div>
-  <div class="lst">${S.decks.length?"":'<div class="empty">No decks yet. Paste a list from Arena, Moxfield or a text file and Binder checks every line against what you own.</div>'}${S.decks.map(d=>{const s=deckStats(d);return `<button class="row" data-deck="${d.id}" style="min-height:58px"><div class="tx"><div class="n">${esc(d.name)}</div><div class="d">${esc(d.format)} · ${s.need} cards</div></div><div style="text-align:right;min-width:70px"><div class="q ${s.have===s.need?"own":""}" style="color:${s.have===s.need?"var(--ok)":"var(--wn)"};font-weight:600">${s.have} / ${s.need}</div><div class="bar" style="margin-top:4px"><i style="width:${s.need?100*s.have/s.need:0}%"></i></div></div></button>`;}).join("")}</div>
+  <div class="lst">${S.decks.length?"":'<div class="empty">No decks yet. Paste a list from Arena, Moxfield or a text file and Binder checks every line against what you own.</div>'}${S.decks.map(d=>{const s=deckStats(d);return `<button class="row" data-deck="${d.id}"><div class="tx"><div class="n">${esc(d.name)}</div><div class="d"><span>${esc(d.format)}</span><span>${s.need} cards</span></div><div class="bar"><i style="width:${s.need?100*s.have/s.need:0}%"></i></div></div><div class="frac ${s.have===s.need?"ok":"wn"}"><b>${s.have}</b><span>/ ${s.need}</span></div></button>`;}).join("")}</div>
   <div id="pastebox" hidden style="margin-top:12px">
     <div class="in" style="margin-bottom:8px"><input id="dname" placeholder="Deck name"></div>
     <textarea id="dtext" placeholder="1 Goblin Chieftain (MH2) 127&#10;1x Lightning Bolt&#10;Sol Ring"></textarea>
@@ -879,8 +967,8 @@ function rDeck(){
   const groups={};for(const l of d.lines){const card=l.cardId?BY_ID[l.cardId]:null;const g=card?(card.types.includes("Land")?"Lands":card.types.includes("Creature")?"Creatures":card.types[0]==="Sorcery"?"Sorceries":(card.types[0]||"Other")+"s"):"Unknown";(groups[g]=groups[g]||[]).push(l);}
   const order=["Creatures","Instants","Sorceries","Enchantments","Artifacts","Planeswalkers","Battles","Lands","Others","Unknown"];
   el.innerHTML=`<div class="top"><button class="back" id="bk">‹ Decks</button><button class="btn sm" id="del">Delete</button></div>
-  <div style="font-weight:700;font-size:19px;line-height:1.15">${esc(d.name)}</div>
-  <div class="mu" style="font-size:13px;margin:2px 0 8px">${esc(d.format)} · <span style="color:${s.have===s.need?"var(--ok)":"var(--wn)"};font-weight:600">${s.have} / ${s.need} owned</span>${s.need-s.have?` · ${s.need-s.have} missing`:""}</div>
+  <h2 class="title">${esc(d.name)}</h2>
+  <div class="mu" style="font-size:13px;margin:4px 0 10px">${esc(d.format)} · <span style="color:${s.have===s.need?"var(--ok)":"var(--wn)"};font-weight:600">${s.have} / ${s.need} owned</span>${s.need-s.have?` · ${s.need-s.have} missing`:""}</div>
   <div class="bar"><i style="width:${s.need?100*s.have/s.need:0}%"></i></div>
   ${order.filter(g=>groups[g]).map(g=>`<div class="h">${g} · ${groups[g].filter(l=>!l.cardId||ownedOf(l.cardId)<l.qty).length} of ${groups[g].length} missing</div>
     <div class="lst">${groups[g].map((l,i)=>({l,i})).sort((a,b)=>{const am=a.l.cardId?ownedOf(a.l.cardId)>=a.l.qty:false,bm=b.l.cardId?ownedOf(b.l.cardId)>=b.l.qty:false;return am-bm;}).map(({l,i})=>{const own=l.cardId?ownedOf(l.cardId):0;const ok=own>=l.qty;const card=l.cardId?BY_ID[l.cardId]:null;return `<button class="deckline ${ok?"ok":""}" data-line="${g}|${i}" ${card?"":"disabled"}><span class="qn">${l.qty}</span>${card?stripe(card,"min-height:26px;width:3px"):'<span class="stripe" style="min-height:26px;width:3px"></span>'}<span class="nm">${esc(l.name)}</span><span class="st">${card?(ok?"✓":own+" / "+l.qty):"not in index"}</span></button>`;}).join("")}</div>`).join("")}
@@ -1013,7 +1101,9 @@ async function restoreBackup(file){
 let confirmReset=false;
 function rMore(){
   const el=$("#v-more");
-  el.innerHTML=`<div class="top"><h1>More</h1></div>
+  el.innerHTML=`<div class="top"><h1>Settings</h1></div>
+  <div class="h">Bottom bar</div>
+  <div class="sect"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px"><div><div>${pins().map(k=>DEST[k].label).join(" · ")}</div><div class="note" style="margin-top:2px">${(()=>{const m=ARCHETYPES.find(a=>a.pins.join()===pins().join());return m?"Preset: "+m.name:"Custom";})()}. The first one is your home screen.</div></div><button class="btn sm" id="editbar">Edit</button></div></div>
   <div class="sect"><div style="display:flex;justify-content:space-between"><span>Collection</span><span class="mono">${totalOwned()} cards</span></div><div style="display:flex;justify-content:space-between;margin-top:6px"><span>Printings</span><span class="mono">${Object.keys(S.col).length}</span></div><div style="display:flex;justify-content:space-between;margin-top:6px"><span>Index</span><span class="mono">${INDEX.length.toLocaleString()} cards · ${Object.keys(SETS).length} sets</span></div><div style="display:flex;justify-content:space-between;margin-top:6px"><span>Index built</span><span class="mono">2026-10-17</span></div><div style="display:flex;justify-content:space-between;margin-top:6px"><span>OCR engine</span><span class="mono" id="ocrstate">${ocrState==="ready"?"ready":ocrState==="failed"?"unavailable":ocrState==="loading"?"starting…":"starts on first scan"}</span></div><div style="display:flex;justify-content:space-between;margin-top:6px"><span>Auto-accept threshold</span><span class="mono">${THRESHOLD}%</span></div><div style="display:flex;justify-content:space-between;margin-top:6px"><span>App version</span><span class="mono">${APP_VERSION}</span></div></div>
   <div class="btnrow" style="margin-top:10px"><button class="btn" id="checkupd">Check for updates</button><button class="btn" id="clearcache">Reset app cache</button></div>
   <div class="note">Reset re-downloads the app, index and OCR engine on next load. Your collection stays.</div>
@@ -1051,6 +1141,7 @@ function rMore(){
   el.querySelectorAll("[data-cur]").forEach(b=>b.onclick=()=>{S.prefs=S.prefs||{};S.prefs.currency=b.dataset.cur;save();snapshotValue();rMore();});
   $("#refreshp").onclick=()=>{for(const k in (S.prices||{}))S.prices[k].at=0;wantOwnedPrices();rMore();};
   $("#clearcache").onclick=async()=>{const b=$("#clearcache");b.disabled=true;b.textContent="Resetting…";try{if("serviceWorker" in navigator){const rs=await navigator.serviceWorker.getRegistrations();await Promise.all(rs.map(r=>r.unregister()));}if(window.caches){const ks=await caches.keys();await Promise.all(ks.map(k=>caches.delete(k)));}}catch(e){}location.reload();};
+  $("#editbar").onclick=openPinEditor;
   $("#imgtoggle").onclick=()=>{S.prefs=S.prefs||{};S.prefs.images=!imagesOn();save();rMore();};
   const wm=$("#warm");if(wm)wm.onclick=async()=>{wm.disabled=true;wm.textContent="Starting…";await getOCR();rMore();toast(ocrState==="ready"?"OCR ready":"OCR couldn't start");};
 }
@@ -1068,18 +1159,18 @@ function copyText(txt,msg){
   /* URL hash: #scan opens a tab; #demo/binder loads the demo collection first; #demo/card/Lightning%20Bolt opens a card. */
   const h=decodeURIComponent((location.hash||"").slice(1));const parts=h.split("/");
   if(parts[0]==="demo"){if(!totalOwned()){S=seed();save();}parts.shift();}
-  if(TABS.includes(parts[0]))view=parts[0];
+  if(TABS.includes(parts[0]))view=parts[0];else if(parts[0]!=="card"&&parts[0]!=="deck"&&parts[0]!=="set"&&parts[0]!=="type"&&parts[0]!=="review")view=pins()[0];
   if(parts[0]==="card"&&BY_ID[parts.slice(1).join("/")]){view="card";curArg={id:parts.slice(1).join("/")};}
   if(parts[0]==="search"&&parts[1]){q=parts[1];}
   if(parts[0]==="review")view="review";
   if(parts[0]==="set"&&SETS[parts[1]]){view="checklist";curArg={kind:"set",code:parts[1]};}
   if(parts[0]==="type"&&parts[1]){if(!TYPEIDX)buildTypeIndex();const t=[...TYPEIDX.keys()].find(k=>k.toLowerCase()===parts[1].toLowerCase());if(t){view="checklist";curArg={kind:"type",code:t};}}
-  if(parts[0]==="sets"){view="binder";colSeg="sets";}if(parts[0]==="types"){view="binder";colSeg="types";}
-  if(S.prefs&&S.prefs.colSeg&&TABS.includes(view)&&view!=="binder")colSeg=S.prefs.colSeg;
+
   if(parts[0]==="deck"&&S.decks[0]){view="deck";curArg={id:S.decks[0].id};}
-  if(!$("#v-checklist")){const sec=document.createElement("section");sec.className="screen";sec.id="v-checklist";$("#tabbar").before(sec);}
-  $("#tabbar").hidden=false;
-  render();
+  for(const id of ["v-checklist","v-sets","v-types","v-archetype"])if(!$("#"+id)){const sec=document.createElement("section");sec.className="screen";sec.id=id;$("#tabbar").before(sec);}
+  buildTabbar();
+  if(!(S.prefs&&S.prefs.onboarded)&&!(parts.length&&parts[0])){document.querySelectorAll(".screen").forEach(x=>{x.classList.remove("on");x.setAttribute("aria-hidden","true");});rArchetype();$("#v-archetype").classList.add("on");$("#v-archetype").removeAttribute("aria-hidden");$("#tabbar").hidden=true;}
+  else{if(!(S.prefs&&S.prefs.onboarded)){S.prefs=S.prefs||{};S.prefs.onboarded=true;S.prefs.archetype="custom";save();}$("#tabbar").hidden=false;render();}
   try{setupUpdates();}catch(e){}
   wantOwnedPrices();
   if(S.prefs){if(S.prefs.live===false)live.on=false;if(S.prefs.sound===false)live.sound=false;}
@@ -1087,7 +1178,7 @@ function copyText(txt,msg){
 })();
 /* After a deploy the old cached app runs once while the new service worker installs.
    When the new one takes over, reload once so the new build is what you see. */
-const APP_VERSION="20261018a";
+const APP_VERSION="20261018b";
 let swReg=null;
 function setupUpdates(){
   if(!("serviceWorker" in navigator))return;
