@@ -5,18 +5,20 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Binder</title>
 <meta name="description" content="Offline Magic: The Gathering collection tracker. Scan a card with the camera, it goes in the binder.">
-<meta name="theme-color" content="#121417" media="(prefers-color-scheme: dark)">
-<meta name="theme-color" content="#f4f5f7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0c0c0e">
+<script>/* Apply the saved colour scheme before the first paint. Mirrors applyScheme() in js/binder.js. */
+(function(){try{var p=(JSON.parse(localStorage.getItem("binder-v2")||"{}").prefs)||{};var d=document.documentElement;var id=p.scheme||"gold";
+var A={W:["#e9dfc0","#1a1609","#121110","#1c1a17","#26231f","#33302a","#6b5a2a"],U:["#2b6fd0","#ffffff","#0b1017","#131a24","#1a2331","#263241","#1f63b8"],B:["#7d4fc9","#ffffff","#0d0b10","#17131c","#201a27","#2d2636","#5f3aa6"],R:["#d7301f","#ffffff","#120e0d","#1c1514","#261c1a","#352826","#c8281c"],G:["#257a42","#ffffff","#0b110e","#131b16","#1a241d","#25332a","#237a3e"],C:["#b8c0cc","#111111","#0e0f12","#17191d","#1f2227","#2c3038","#4a5563"]};
+var O={W:["#d9a441","#8a5f0e"],U:["#6cc3ff","#1b6fb0"],B:["#d9ccb3","#6f6252"],R:["#f2a93b","#a3500a"],G:["#b7d86a","#497310"],C:["#6fb6d6","#1f7398"]};
+if(id==="custom"){var a=A[p.schemeAcc]||A.R,o=O[p.schemeOwn]||O.W,k=["--s-acc","--s-aci","--s-bg","--s-sf","--s-sf2","--s-ln","--l-acc","--l-aci","--s-own","--l-own"],v=[a[0],a[1],a[2],a[3],a[4],a[5],a[6],"#ffffff",o[0],o[1]];for(var i=0;i<k.length;i++)d.style.setProperty(k[i],v[i]);}
+d.setAttribute("data-scheme",id);if(p.appearance==="dark"||p.appearance==="light")d.setAttribute("data-theme",p.appearance);}catch(e){}})();</script>
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Binder">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icons/icon-192.png" type="image/png">
 <link rel="apple-touch-icon" href="icons/icon-192.png">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Figtree:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
-<link rel="stylesheet" href="css/binder.css?v=20261018j">
+<link rel="stylesheet" href="css/binder.css?v=20261018k">
 </head>
 <body>
 <div class="app" id="app">
@@ -38,6 +40,6 @@
 <div class="overlay" id="overlay"><div class="sheet" id="sheet" role="dialog" aria-modal="true"></div></div>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 <script src="js/vendor/tesseract.min.js?v=5.1.1"></script>
-<script src="js/binder.js?v=20261018j"></script>
+<script src="js/binder.js?v=20261018k"></script>
 </body>
 </html>

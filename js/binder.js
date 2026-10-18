@@ -156,6 +156,34 @@ const DEST={
   review:{label:"Review",icon:"review",render:()=>rReview()},
   more:{label:"Settings",icon:"more",render:()=>rMore()},
 };
+/* Colour schemes. Two roles: the action colour (buttons, active filters, alerts) and the owned colour
+   (counts, progress, the active tab). Presets are named for the basic lands; "custom" picks each role
+   from the six colours. The CSS holds the preset values; custom writes the primitives inline. */
+const SCHEMES=[{id:"gold",name:"Top 8",acc:"#d7301f",own:"#d9a441"},{id:"w",name:"Plains",acc:"#e9dfc0",own:"#d9a441"},{id:"u",name:"Island",acc:"#2b6fd0",own:"#6cc3ff"},{id:"b",name:"Swamp",acc:"#7d4fc9",own:"#d9ccb3"},{id:"r",name:"Mountain",acc:"#d7301f",own:"#f2a93b"},{id:"g",name:"Forest",acc:"#257a42",own:"#b7d86a"},{id:"c",name:"Steel",acc:"#b8c0cc",own:"#6fb6d6"}];
+const COLOUR_ACT={W:["#e9dfc0","#1a1609","#121110","#1c1a17","#26231f","#33302a","#6b5a2a"],U:["#2b6fd0","#ffffff","#0b1017","#131a24","#1a2331","#263241","#1f63b8"],B:["#7d4fc9","#ffffff","#0d0b10","#17131c","#201a27","#2d2636","#5f3aa6"],R:["#d7301f","#ffffff","#120e0d","#1c1514","#261c1a","#352826","#c8281c"],G:["#257a42","#ffffff","#0b110e","#131b16","#1a241d","#25332a","#237a3e"],C:["#b8c0cc","#111111","#0e0f12","#17191d","#1f2227","#2c3038","#4a5563"]};
+const COLOUR_OWN={W:["#d9a441","#8a5f0e"],U:["#6cc3ff","#1b6fb0"],B:["#d9ccb3","#6f6252"],R:["#f2a93b","#a3500a"],G:["#b7d86a","#497310"],C:["#6fb6d6","#1f7398"]};
+const COLOUR_NAME={W:"White",U:"Blue",B:"Black",R:"Red",G:"Green",C:"Colourless"};
+function applyScheme(){
+  const p=(S&&S.prefs)||{};const root=document.documentElement;const st=root.style;const id=SCHEMES.some(s=>s.id===p.scheme)||p.scheme==="custom"?p.scheme:"gold";
+  const keys=["--s-acc","--s-aci","--s-bg","--s-sf","--s-sf2","--s-ln","--l-acc","--l-aci","--s-own","--l-own"];
+  if(id==="custom"){const a=COLOUR_ACT[p.schemeAcc]||COLOUR_ACT.R,o=COLOUR_OWN[p.schemeOwn]||COLOUR_OWN.W;[a[0],a[1],a[2],a[3],a[4],a[5],a[6],"#ffffff",o[0],o[1]].forEach((v,i)=>st.setProperty(keys[i],v));}
+  else keys.forEach(k=>st.removeProperty(k));
+  root.setAttribute("data-scheme",id);
+  if(p.appearance==="dark"||p.appearance==="light")root.setAttribute("data-theme",p.appearance);else root.removeAttribute("data-theme");
+  requestAnimationFrame(()=>{const bg=getComputedStyle(document.body).backgroundColor;document.querySelectorAll("meta[name=theme-color]").forEach(m=>m.content=bg);});
+}
+function schemeControls(){
+  const p=S.prefs||{};const cur=SCHEMES.some(s=>s.id===p.scheme)||p.scheme==="custom"?p.scheme:"gold";
+  const sw=s=>`<span class="sw" style="background:linear-gradient(135deg,${s.acc} 50%,${s.own} 50%)"></span>`;
+  return `<div class="schemes">${SCHEMES.map(s=>`<button class="scheme ${cur===s.id?"on":""}" data-scheme="${s.id}" aria-pressed="${cur===s.id}">${sw(s)}${s.name}</button>`).join("")}<button class="scheme ${cur==="custom"?"on":""}" data-scheme="custom" aria-pressed="${cur==="custom"}"><span class="sw" style="background:conic-gradient(#e9dfc0,#2b6fd0,#7d4fc9,#d7301f,#257a42,#e9dfc0)"></span>Your own</button></div>
+  ${cur==="custom"?`<div class="pipsel"><span class="lbl">Actions</span>${Object.keys(COLOUR_ACT).map(c=>`<button data-cacc="${c}" aria-pressed="${(p.schemeAcc||"R")===c}" aria-label="${COLOUR_NAME[c]} actions" style="background:${COLOUR_ACT[c][0]}"></button>`).join("")}</div>
+  <div class="pipsel"><span class="lbl">Owned</span>${Object.keys(COLOUR_OWN).map(c=>`<button data-cown="${c}" aria-pressed="${(p.schemeOwn||"W")===c}" aria-label="${COLOUR_NAME[c]} for owned" style="background:${COLOUR_OWN[c][0]}"></button>`).join("")}</div>`:""}`;
+}
+function wireSchemeControls(el,after){
+  el.querySelectorAll("[data-scheme]").forEach(b=>b.onclick=()=>{S.prefs=S.prefs||{};S.prefs.scheme=b.dataset.scheme;if(b.dataset.scheme==="custom"){S.prefs.schemeAcc=S.prefs.schemeAcc||"R";S.prefs.schemeOwn=S.prefs.schemeOwn||"W";}save();applyScheme();after();});
+  el.querySelectorAll("[data-cacc]").forEach(b=>b.onclick=()=>{S.prefs.schemeAcc=b.dataset.cacc;save();applyScheme();after();});
+  el.querySelectorAll("[data-cown]").forEach(b=>b.onclick=()=>{S.prefs.schemeOwn=b.dataset.cown;save();applyScheme();after();});
+}
 const ARCHETYPES=[
   {id:"collector",name:"Collector",blurb:"I chase sets, tribes and full binders.",pins:["sets","scan","types","search"]},
   {id:"builder",name:"Deck builder",blurb:"I build Commander or Constructed decks from what I own.",pins:["decks","search","binder","scan"]},
@@ -230,15 +258,27 @@ function openSwapPicker(incoming,p,back){
   $("#sheet").querySelectorAll("[data-rep]").forEach(b=>b.onclick=()=>{p[+b.dataset.rep]=incoming;back();});
   $("#swapcancel").onclick=back;
 }
-function rArchetype(){
+function rArchetype(step){
   const el=$("#v-archetype");
+  if(step==="colours"){
+    el.innerHTML=`<div class="arch">
+      <div class="arch-head"><b>Your colours</b><div class="mu">One colour for buttons and filters, one for the cards you own. Named for the basic lands; pick whatever you play. You can change it in Settings.</div></div>
+      <div id="schemepick">${schemeControls()}</div>
+      <button class="btn ghost" id="archdone" style="margin-top:6px">Done</button>
+    </div>`;
+    const redraw=()=>{const sp=$("#schemepick");if(sp)sp.innerHTML=schemeControls();wireSchemeControls(el,redraw);};
+    wireSchemeControls(el,redraw);
+    $("#archdone").onclick=finishOnboarding;
+    return;
+  }
   el.innerHTML=`<div class="arch">
     <div class="arch-head"><b>Binder</b><div class="mu">How do you play Magic? This only sets which four things sit in the bottom bar. Everything else is the same, and you can change it any time.</div></div>
     <div class="arch-list">${ARCHETYPES.map(a=>`<button class="arch-opt" data-arch="${a.id}"><div class="arch-name">${a.name}</div><div class="arch-blurb">${a.blurb}</div><div class="arch-bar">${a.pins.map(k=>`<span>${svg(DEST[k].icon)}${DEST[k].label}</span>`).join("")}</div></button>`).join("")}
     <button class="arch-opt quiet" data-arch="custom"><div class="arch-name">Let me choose</div><div class="arch-blurb">Start with Search · Scan · Binder · Decks and edit the bar yourself.</div></button></div>
   </div>`;
-  el.querySelectorAll("[data-arch]").forEach(b=>b.onclick=()=>{const a=ARCHETYPES.find(x=>x.id===b.dataset.arch);S.prefs=S.prefs||{};S.prefs.archetype=b.dataset.arch;S.prefs.pins=(a?a.pins:DEFAULT_PINS).slice();S.prefs.onboarded=true;save();buildTabbar();el.classList.remove("on");el.setAttribute("aria-hidden","true");$("#tabbar").hidden=false;view=pins()[0];render();});
+  el.querySelectorAll("[data-arch]").forEach(b=>b.onclick=()=>{const a=ARCHETYPES.find(x=>x.id===b.dataset.arch);S.prefs=S.prefs||{};S.prefs.archetype=b.dataset.arch;S.prefs.pins=(a?a.pins:DEFAULT_PINS).slice();save();buildTabbar();rArchetype("colours");el.scrollTop=0;});
 }
+function finishOnboarding(){const el=$("#v-archetype");S.prefs=S.prefs||{};S.prefs.onboarded=true;save();el.classList.remove("on");el.setAttribute("aria-hidden","true");$("#tabbar").hidden=false;view=pins()[0];render();}
 /* Sub-screens push a history entry so the phone's back button (or Escape) returns from a card
    instead of leaving the app. Sheets do the same. */
 function go(v,arg){
@@ -355,9 +395,9 @@ function rCard(){
     ${stripe(card,"min-height:146px")}
     ${thumb(card,"lg")}
     <div style="flex:1;min-width:0">
-      <div style="font-weight:700;font-size:19px;line-height:1.15;text-wrap:balance">${esc(card.name)}</div>
+      <div style="font-family:var(--display);font-weight:600;font-size:24px;line-height:1.05;text-wrap:balance">${esc(card.name)}</div>
       <div class="mu" style="font-size:13px;margin:4px 0 10px;display:flex;align-items:center;gap:6px;flex-wrap:wrap">${pips(card.cost)} <span>${esc([...card.sup,...card.types].join(" "))}${card.sub.length?" — ":""}${card.sub.map(t=>(card.types.includes("Creature")||card.types.includes("Kindred"))?`<button class="lnk" data-typelink="${esc(t)}">${esc(t)}</button>`:esc(t)).join(" ")}</span>${card.pt?`<span class="mono">${esc(card.pt)}</span>`:""}</div>
-      <div style="font-size:30px;font-weight:700;line-height:1" class="mono">${own}<span class="mu" style="font-size:12px;font-weight:500;font-family:var(--sans)"> &nbsp;owned</span></div>
+      <div style="font-family:var(--display);font-size:40px;font-weight:600;line-height:.9;color:${own?"var(--own)":"var(--mu)"}">${own}<span class="mu" style="font-size:12.5px;font-weight:500;font-family:var(--sans)"> &nbsp;owned</span></div>
       <div class="mu" style="font-size:12px;margin-top:4px">${(()=>{let t=0,k=0,n=0;for(const e of Object.values(S.col)){if(e.id!==card.id)continue;const v=entryValue(e);if(v){t+=v.total;k+=v.known;n+=v.of;}}return k?`worth ${fmt(t)}${k<n?" (partial)":""} · `:"";})()}${card.prints.length} printing${card.prints.length>1?"s":""}</div>
     </div>
   </div>
@@ -1180,6 +1220,10 @@ let confirmReset=false;
 function rMore(){
   const el=$("#v-more");
   el.innerHTML=`<div class="top"><h1>Settings</h1></div>
+  <div class="h">Colours</div>
+  <div class="sect"><div>One colour for actions, one for what you own.</div>${schemeControls()}
+    <div class="note" style="margin-top:14px">Appearance</div>
+    <div class="chips" style="margin-top:6px">${[["system","Match system"],["dark","Dark"],["light","Light"]].map(([k,l])=>`<button class="chip ${(S.prefs&&S.prefs.appearance||"system")===k?"on":""}" data-appear="${k}" aria-pressed="${(S.prefs&&S.prefs.appearance||"system")===k}">${l}</button>`).join("")}</div></div>
   <div class="h">Bottom bar</div>
   <div class="sect"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px"><div><div>${pins().map(k=>DEST[k].label).join(" · ")}</div><div class="note" style="margin-top:2px">${(()=>{const m=ARCHETYPES.find(a=>a.pins.join()===pins().join());return m?"Preset: "+m.name:"Custom";})()}. The first one is your home screen.</div></div><button class="btn sm" id="editbar">Edit</button></div></div>
   <div class="sect"><div style="display:flex;justify-content:space-between"><span>Collection</span><span class="mono">${totalOwned()} cards</span></div><div style="display:flex;justify-content:space-between;margin-top:6px"><span>Printings</span><span class="mono">${Object.keys(S.col).length}</span></div><div style="display:flex;justify-content:space-between;margin-top:6px"><span>Index</span><span class="mono">${INDEX.length.toLocaleString()} cards · ${Object.keys(SETS).length} sets</span></div><div style="display:flex;justify-content:space-between;margin-top:6px"><span>Index built</span><span class="mono">2026-10-17</span></div><div style="display:flex;justify-content:space-between;margin-top:6px"><span>OCR engine</span><span class="mono" id="ocrstate">${ocrState==="ready"?"ready":ocrState==="failed"?"unavailable":ocrState==="loading"?"starting…":"starts on first scan"}</span></div><div style="display:flex;justify-content:space-between;margin-top:6px"><span>Auto-accept threshold</span><span class="mono">${THRESHOLD}%</span></div><div style="display:flex;justify-content:space-between;margin-top:6px"><span>App version</span><span class="mono">${APP_VERSION}</span></div></div>
@@ -1222,6 +1266,8 @@ function rMore(){
   $("#clearcache").onclick=async()=>{const b=$("#clearcache");b.disabled=true;b.textContent="Resetting…";try{if("serviceWorker" in navigator){const rs=await navigator.serviceWorker.getRegistrations();await Promise.all(rs.map(r=>r.unregister()));}if(window.caches){const ks=await caches.keys();await Promise.all(ks.map(k=>caches.delete(k)));}}catch(e){}location.reload();};
   $("#editbar").onclick=openPinEditor;
   $("#imgtoggle").onclick=()=>{S.prefs=S.prefs||{};S.prefs.images=!imagesOn();save();rMore();};
+  wireSchemeControls(el,()=>rMore());
+  el.querySelectorAll("[data-appear]").forEach(b=>b.onclick=()=>{S.prefs=S.prefs||{};S.prefs.appearance=b.dataset.appear;save();applyScheme();rMore();});
   const dg=$("#diagtoggle");if(dg)dg.onclick=()=>{S.prefs=S.prefs||{};S.prefs.diag=!S.prefs.diag;save();rMore();};
   const wm=$("#warm");if(wm)wm.onclick=async()=>{wm.disabled=true;wm.textContent="Starting…";await getOCR();rMore();toast(ocrState==="ready"?"OCR ready":"OCR couldn't start");};
 }
@@ -1235,7 +1281,7 @@ function copyText(txt,msg){
 (async function boot(){
   try{await loadIndex();}
   catch(e){const t=document.getElementById("ldmsg");if(t)t.textContent="Couldn't load the card index ("+((e&&e.message)||e)+"). Reload to try again.";return;}
-  load();
+  load();applyScheme();
   /* URL hash: #scan opens a tab; #demo/binder loads the demo collection first; #demo/card/Lightning%20Bolt opens a card. */
   const h=decodeURIComponent((location.hash||"").slice(1));const parts=h.split("/");
   if(parts[0]==="demo"){if(!totalOwned()){S=seed();save();}parts.shift();}
@@ -1259,7 +1305,7 @@ function copyText(txt,msg){
 })();
 /* After a deploy the old cached app runs once while the new service worker installs.
    When the new one takes over, reload once so the new build is what you see. */
-const APP_VERSION="20261018j";
+const APP_VERSION="20261018k";
 let swReg=null;
 function setupUpdates(){
   if(!("serviceWorker" in navigator))return;
