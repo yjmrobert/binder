@@ -242,8 +242,9 @@ function rArchetype(){
 /* Sub-screens push a history entry so the phone's back button (or Escape) returns from a card
    instead of leaving the app. Sheets do the same. */
 function go(v,arg){
+  const fromSheet=pendingBack||sheetOpen();if(sheetOpen())closeSheet(true);pendingBack=false;
   if(TABS.includes(v)){stack=[];try{history.replaceState({tab:v},"","#"+v);}catch(e){}}
-  else{stack.push({view,arg:curArg});try{history.pushState({sub:true},"","#"+v);}catch(e){}}
+  else{stack.push({view,arg:curArg});try{if(fromSheet)history.replaceState({sub:true},"","#"+v);else history.pushState({sub:true},"","#"+v);}catch(e){}}
   if(v!=="scan"&&view==="scan")closeCamera();
   view=v;curArg=arg;render();
 }
@@ -252,7 +253,8 @@ function popView(){const p=stack.pop();if(p){view=p.view;curArg=p.arg;}else{view
 window.addEventListener("popstate",()=>{
   if($("#overlay").classList.contains("on")){closeSheet(true);return;}
   if(stack.length){popView();return;}
-  const h=(location.hash||"").slice(1);if(TABS.includes(h)&&h!==view){view=h;curArg=null;render();}
+  const h=(location.hash||"").slice(1);if(TABS.includes(h)){if(h!==view){view=h;curArg=null;render();}}
+  else if(["card","deck","checklist"].includes(h)&&TABS.includes(view)){try{history.back();}catch(e){}} /* orphaned sub-screen entry (left when a sheet navigated away): skip it */
 });
 document.addEventListener("keydown",e=>{if(e.key==="Escape"){if($("#overlay").classList.contains("on"))closeSheet();else if(stack.length)back();}});
 function render(){
@@ -400,11 +402,15 @@ function openAddSheet(card,prefer){
   };
   draw();openSheet();
 }
-let sheetReturn=null;
-function openSheet(){const ov=$("#overlay");if(!ov.classList.contains("on")){sheetReturn=document.activeElement;try{history.pushState({sheet:true},"");}catch(e){}}ov.classList.add("on");
+let sheetReturn=null,pendingBack=false;
+/* A sheet owns one history entry. Closing it pops that entry, but only after the current task:
+   if another sheet opens, or go() navigates, in the same tick, that entry is reused instead,
+   so the deferred popstate can never undo the navigation. */
+function sheetOpen(){return $("#overlay").classList.contains("on");}
+function openSheet(){const ov=$("#overlay");if(!ov.classList.contains("on")){if(pendingBack)pendingBack=false;else{sheetReturn=document.activeElement;try{history.pushState({sheet:true},"");}catch(e){}}}ov.classList.add("on");
   requestAnimationFrame(()=>{const f=$("#sheet").querySelector("input,button:not([disabled])");if(f&&!/input/i.test(f.tagName))f.focus({preventScroll:true});else if(f)f.focus();});}
 function closeSheet(fromHistory){const ov=$("#overlay");if(!ov.classList.contains("on"))return;ov.classList.remove("on");
-  if(!fromHistory&&history.state&&history.state.sheet){try{history.back();}catch(e){}}
+  if(!fromHistory&&history.state&&history.state.sheet){pendingBack=true;setTimeout(()=>{if(!pendingBack)return;pendingBack=false;if(!ov.classList.contains("on"))try{history.back();}catch(e){}},0);}
   if(sheetReturn&&sheetReturn.focus&&document.contains(sheetReturn))sheetReturn.focus({preventScroll:true});sheetReturn=null;}
 $("#overlay").onclick=e=>{if(e.target===$("#overlay"))closeSheet();};
 
@@ -1171,6 +1177,7 @@ function copyText(txt,msg){
   buildTabbar();
   if(!(S.prefs&&S.prefs.onboarded)&&!(parts.length&&parts[0])){document.querySelectorAll(".screen").forEach(x=>{x.classList.remove("on");x.setAttribute("aria-hidden","true");});rArchetype();$("#v-archetype").classList.add("on");$("#v-archetype").removeAttribute("aria-hidden");$("#tabbar").hidden=true;}
   else{if(!(S.prefs&&S.prefs.onboarded)){S.prefs=S.prefs||{};S.prefs.onboarded=true;S.prefs.archetype="custom";save();}$("#tabbar").hidden=false;render();}
+  if(TABS.includes(view))try{history.replaceState({tab:view},"","#"+view);}catch(e){} /* base entry carries the tab, so back from a tray navigation returns here */
   try{setupUpdates();}catch(e){}
   wantOwnedPrices();
   if(S.prefs){if(S.prefs.live===false)live.on=false;if(S.prefs.sound===false)live.sound=false;}
@@ -1178,7 +1185,7 @@ function copyText(txt,msg){
 })();
 /* After a deploy the old cached app runs once while the new service worker installs.
    When the new one takes over, reload once so the new build is what you see. */
-const APP_VERSION="20261018c";
+const APP_VERSION="20261018d";
 let swReg=null;
 function setupUpdates(){
   if(!("serviceWorker" in navigator))return;
