@@ -14,6 +14,7 @@ Live: https://www.yjmrobert.com/binder/ (the github.io address redirects there)
 - **Decks** — paste a decklist (Arena, Moxfield or plain lines), see what you own and what's missing, and get substitutes suggested from cards you already have.
 - **Card art** — loaded on demand from Scryfall's image CDN by printing, over a typographic fallback card that stays when offline. Images you've viewed are cached by the service worker (up to a few thousand), so your own collection's art is available offline after one look. Toggle under More.
 - **Prices and value** — per-printing prices from Scryfall's collection endpoint (TCGplayer USD, Cardmarket EUR), fetched only for what you own and the card you're viewing, cached for a day; collection total with a daily history line under More.
+- **Google Drive sync** — optional. One file in the user's own Drive (`Binder/collection.json`, scope `drive.file`, so the app sees only what it created). Every sync is a merge: copies carry stable ids and removals leave tombstones, so the result is the union of copies minus tombstones on both sides; decks and bar/colour preferences are last-writer-wins. Syncs on open, when the app goes to the background, 20 s after a change, after a scan session, and on demand. Tokens come from the browser OAuth flow (no SDK) via `oauth.html`; they last an hour and background syncs simply wait for the next sign-in when one has expired.
 - **Import and export** — import ManaBox, Delver Lens, TCGplayer, Dragon Shield, Moxfield or Archidekt CSV exports (or a plain decklist) with a match preview; export CSV with Scryfall ids or a Moxfield-style list; JSON backup and restore.
 
 The look is "Top 8": charcoal tinted toward your action colour, condensed display type, cut corners. Two colours do all the work: one for actions (buttons, active filters, alerts) and one for what you own (counts, progress, the active tab, owned cards). Settings → Colours offers presets named for the basic lands (Top 8, Plains, Island, Swamp, Mountain, Forest, Steel) or lets you pick each role from the six colours; first open asks after the bottom bar. Appearance follows the system or can be pinned dark or light; light mode is the pairings sheet, paper and black type with the same two colours darkened to pass contrast.
@@ -34,6 +35,7 @@ ocr/                    tesseract.js worker, LSTM core (simd + fallback), Englis
 data/                   card index: 36k cards, 114k printings (with Scryfall ids), 774 sets with base set sizes
 sw.js                   service worker (precache shell + data, runtime-cache OCR)
 manifest.webmanifest    PWA manifest
+oauth.html              OAuth redirect target: stores the Drive token and hands it back to the app
 tools/build-index.py    regenerates data/ from a magic-search-engine checkout
 ```
 
@@ -49,6 +51,14 @@ python3 tools/build-index.py tools/magic-search-engine
 ```
 
 Then bump `DATA_VERSION` in `sw.js`. For app changes, bump `VERSION` in `sw.js`, the `?v=` on the two asset URLs in `index.html` and `sw.js`, and `APP_VERSION` in `js/binder.js`; open clients reload themselves once the new service worker takes over. The install step fetches with `cache: "reload"` so GitHub Pages' 10-minute HTTP cache can never seed a new version with stale files.
+
+## Turning on Google Drive sync for a deployment
+
+1. In Google Cloud, create a project, enable the Google Drive API, and configure the OAuth consent screen with only the `https://www.googleapis.com/auth/drive.file` scope (non-sensitive: no verification review needed; publish it to "In production" or test users' grants expire after seven days).
+2. Create an OAuth client of type Web application. Authorized JavaScript origins: your site origin (and `http://localhost:8765` for local work). Authorized redirect URIs: `<site>/oauth.html` (and the localhost one).
+3. Put the client ID in `GDRIVE_CLIENT_ID` in `js/binder.js`. With it empty, Settings explains that sync isn't set up on this install.
+
+`tools/` has nothing to run for this; a stand-in Drive server used in testing lives with the test scripts, not the app.
 
 ## Completion rules
 

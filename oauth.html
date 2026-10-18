@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Binder · signing in</title>
+<style>html{background:#0c0c0e;color:#f6f2e8;font:16px/1.45 system-ui,sans-serif}body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;text-align:center}p{max-width:34ch;margin:8px 0}a{color:inherit}</style>
+</head>
+<body>
+<div><p id="m">Finishing sign-in…</p></div>
+<script>
+(function(){
+  var m=document.getElementById("m");
+  var h=new URLSearchParams((location.hash||"").slice(1));var q=new URLSearchParams(location.search);
+  var err=h.get("error")||q.get("error");var tok=h.get("access_token");var exp=parseInt(h.get("expires_in")||"0",10);var state=h.get("state");
+  var want=null;try{want=localStorage.getItem("binder-oauth-state");}catch(e){}
+  var bc=null;try{bc=new BroadcastChannel("binder-sync");}catch(e){}
+  function tell(msg){try{if(bc)bc.postMessage(msg);}catch(e){}}
+  if(tok&&(!want||want===state)){
+    try{localStorage.setItem("binder-gdrive-token",JSON.stringify({access_token:tok,exp:Date.now()+Math.max(60,exp-60)*1000}));localStorage.removeItem("binder-oauth-state");}catch(e){}
+    tell({type:"token"});
+    m.textContent="Signed in. Returning to Binder…";
+    try{history.replaceState(null,"",location.pathname);}catch(e){}
+    setTimeout(function(){try{window.close();}catch(e){} if(!window.closed){m.innerHTML='Signed in. You can close this tab and go back to Binder, or <a href="./">open it here</a>.';}},300);
+  }else{
+    var why=err||(tok?"The sign-in didn't come from this app":"No sign-in result");
+    tell({type:"error",error:why});
+    m.innerHTML="Sign-in didn't finish ("+why.replace(/[<>&]/g,"")+"). <a href=\"./\">Back to Binder</a>";
+  }
+})();
+</script>
+</body>
+</html>

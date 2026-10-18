@@ -57,10 +57,27 @@ function seed(){
     session:[],prefs:{}};
 }
 function pk(id,set,num){return id+"|"+set+"|"+num;}
-function addCopy(col,id,set,num,copy){const k=pk(id,set,num);(col[k]=col[k]||{id,set,num,copies:[]}).copies.push(copy);if(typeof SETSTATS!=="undefined")SETSTATS=null;if(typeof S!=="undefined"&&S&&col===S.col){const c=BY_ID[id];const p=c&&c.prints.find(x=>x.set===set&&x.num===num);if(p&&typeof wantPrices==="function")setTimeout(()=>wantPrices([p]),0);}}
-function empty(){return {col:{},review:[],decks:[],session:[],prefs:{}};}
-function load(){try{const raw=localStorage.getItem(KEY);if(raw){S=JSON.parse(raw);for(const k of Object.keys(S.col))if(!BY_ID[S.col[k].id])delete S.col[k];S.review=S.review.filter(r=>BY_ID[r.guess]);return;}}catch(e){}S=empty();save();}
-function save(){try{localStorage.setItem(KEY,JSON.stringify(S));}catch(e){}}
+function cid(){return Date.now().toString(36)+Math.random().toString(36).slice(2,9);}
+function fnv(s){let h=2166136261;for(let i=0;i<s.length;i++){h^=s.charCodeAt(i);h=Math.imul(h,16777619)>>>0;}return h.toString(36);}
+function addCopy(col,id,set,num,copy){const k=pk(id,set,num);if(!copy.id)copy.id=cid();if(typeof S!=="undefined"&&S&&col===S.col&&S.tomb)delete S.tomb[copy.id];(col[k]=col[k]||{id,set,num,copies:[]}).copies.push(copy);if(typeof SETSTATS!=="undefined")SETSTATS=null;if(typeof S!=="undefined"&&S&&col===S.col){const c=BY_ID[id];const p=c&&c.prints.find(x=>x.set===set&&x.num===num);if(p&&typeof wantPrices==="function")setTimeout(()=>wantPrices([p]),0);}}
+function empty(){return {col:{},review:[],decks:[],session:[],prefs:{},tomb:{},deckTomb:{},prefsAt:0};}
+/* Every copy carries a stable id and removals leave a tombstone, so two devices can be merged as a
+   set: union of copies minus tombstones, which is commutative and idempotent. Copies that predate ids
+   get deterministic ones (printing + date + position), so the same backup restored on two devices
+   does not double up. */
+function migrate(st){
+  st.tomb=st.tomb||{};st.deckTomb=st.deckTomb||{};st.prefsAt=st.prefsAt||0;st.prefs=st.prefs||{};
+  for(const k of Object.keys(st.col)){const e=st.col[k];e.copies.forEach((c,i)=>{if(!c.id)c.id="m"+fnv(k+"|"+(c.date||"")+"|"+i);});}
+  for(const d of st.decks)if(!d.updatedAt)d.updatedAt=0;
+  const cut=Date.now()-90*864e5;for(const id in st.tomb)if(st.tomb[id]<cut)delete st.tomb[id];for(const id in st.deckTomb)if(st.deckTomb[id]<cut)delete st.deckTomb[id];
+  return st;
+}
+/* Remove the newest copy of a printing, leaving a tombstone. Returns the copy so an undo can put it back. */
+function removeLastCopy(k){const e=S.col[k];if(!e||!e.copies.length)return null;const c=e.copies.pop();if(c&&c.id)S.tomb[c.id]=Date.now();if(!e.copies.length)delete S.col[k];return c;}
+function touchPrefs(){S.prefsAt=Date.now();}
+function touchDeck(d){d.updatedAt=Date.now();}
+function load(){try{const raw=localStorage.getItem(KEY);if(raw){S=migrate(JSON.parse(raw));for(const k of Object.keys(S.col))if(!BY_ID[S.col[k].id])delete S.col[k];S.review=S.review.filter(r=>BY_ID[r.guess]);return;}}catch(e){}S=empty();save();}
+function save(){try{localStorage.setItem(KEY,JSON.stringify(S));}catch(e){}if(typeof scheduleSync==="function")scheduleSync();}
 function ownedOf(id){let n=0;for(const k in S.col){const e=S.col[k];if(e.id===id)n+=e.copies.length;}return n;}
 function ownedPrint(id,set,num){const e=S.col[pk(id,set,num)];return e?e.copies.length:0;}
 function totalOwned(){return Object.values(S.col).reduce((n,e)=>n+e.copies.length,0);}
@@ -180,9 +197,9 @@ function schemeControls(){
   <div class="pipsel"><span class="lbl">Owned</span>${Object.keys(COLOUR_OWN).map(c=>`<button data-cown="${c}" aria-pressed="${(p.schemeOwn||"W")===c}" aria-label="${COLOUR_NAME[c]} for owned" style="background:${COLOUR_OWN[c][0]}"></button>`).join("")}</div>`:""}`;
 }
 function wireSchemeControls(el,after){
-  el.querySelectorAll("[data-scheme]").forEach(b=>b.onclick=()=>{S.prefs=S.prefs||{};S.prefs.scheme=b.dataset.scheme;if(b.dataset.scheme==="custom"){S.prefs.schemeAcc=S.prefs.schemeAcc||"R";S.prefs.schemeOwn=S.prefs.schemeOwn||"W";}save();applyScheme();after();});
-  el.querySelectorAll("[data-cacc]").forEach(b=>b.onclick=()=>{S.prefs.schemeAcc=b.dataset.cacc;save();applyScheme();after();});
-  el.querySelectorAll("[data-cown]").forEach(b=>b.onclick=()=>{S.prefs.schemeOwn=b.dataset.cown;save();applyScheme();after();});
+  el.querySelectorAll("[data-scheme]").forEach(b=>b.onclick=()=>{S.prefs=S.prefs||{};S.prefs.scheme=b.dataset.scheme;touchPrefs();if(b.dataset.scheme==="custom"){S.prefs.schemeAcc=S.prefs.schemeAcc||"R";S.prefs.schemeOwn=S.prefs.schemeOwn||"W";}save();applyScheme();after();});
+  el.querySelectorAll("[data-cacc]").forEach(b=>b.onclick=()=>{S.prefs.schemeAcc=b.dataset.cacc;touchPrefs();save();applyScheme();after();});
+  el.querySelectorAll("[data-cown]").forEach(b=>b.onclick=()=>{S.prefs.schemeOwn=b.dataset.cown;touchPrefs();save();applyScheme();after();});
 }
 const ARCHETYPES=[
   {id:"collector",name:"Collector",blurb:"I chase sets, tribes and full binders.",pins:["sets","scan","types","search"]},
@@ -193,7 +210,7 @@ const DEFAULT_PINS=["search","scan","binder","decks"];
 const TABS=Object.keys(DEST);
 const TABOF={card:"search",deck:"decks",checklist:"sets"};
 function pins(){const p=(S&&S.prefs&&S.prefs.pins)||DEFAULT_PINS;return p.filter(k=>DEST[k]).slice(0,4);}
-function setPins(p){S.prefs=S.prefs||{};S.prefs.pins=p.slice(0,4);save();buildTabbar();}
+function setPins(p){S.prefs=S.prefs||{};S.prefs.pins=p.slice(0,4);touchPrefs();save();buildTabbar();}
 const ICONS={
   search:'<circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/>',
   scan:'<path d="M4 8V5.5A1.5 1.5 0 0 1 5.5 4H8M16 4h2.5A1.5 1.5 0 0 1 20 5.5V8M20 16v2.5a1.5 1.5 0 0 1-1.5 1.5H16M8 20H5.5A1.5 1.5 0 0 1 4 18.5V16"/><rect x="8.5" y="7" width="7" height="10" rx="1"/>',
@@ -412,7 +429,7 @@ function rCard(){
   wantPrices(shown.slice(0,PRICE_BATCH));
   $("#bk").onclick=()=>{showAllPrints=false;back();};
   el.querySelectorAll("[data-inc]").forEach(b=>b.onclick=()=>{const [set,num]=b.dataset.inc.split("|");addCopy(S.col,card.id,set,num,{cond:"NM",foil:false,via:"typed",date:today()});save();rCard();toast(`${card.name} · ${set.toUpperCase()} ${num} · now ×${ownedPrint(card.id,set,num)}`);});
-  el.querySelectorAll("[data-dec]").forEach(b=>b.onclick=()=>{const [set,num]=b.dataset.dec.split("|");const k=pk(card.id,set,num);const e=S.col[k];const removed=e.copies.pop();if(!e.copies.length)delete S.col[k];save();rCard();toast(`Removed 1 · ${set.toUpperCase()} ${num}`,()=>{addCopy(S.col,card.id,set,num,removed);save();if(view==="card")rCard();});});
+  el.querySelectorAll("[data-dec]").forEach(b=>b.onclick=()=>{const [set,num]=b.dataset.dec.split("|");const k=pk(card.id,set,num);const removed=removeLastCopy(k);save();rCard();toast(`Removed 1 · ${set.toUpperCase()} ${num}`,()=>{if(removed)addCopy(S.col,card.id,set,num,removed);save();if(view==="card")rCard();});});
   el.querySelectorAll("[data-deck]").forEach(b=>b.onclick=()=>go("deck",{id:b.dataset.deck}));
   const ap=$("#allp");if(ap)ap.onclick=()=>{showAllPrints=!showAllPrints;rCard();};
   el.querySelectorAll("[data-setlink]").forEach(b=>b.onclick=e=>{e.stopPropagation();go("checklist",{kind:"set",code:b.dataset.setlink});});
@@ -736,7 +753,7 @@ function liveBanner(r,kind){const b=$("#livebanner");if(!b)return;const card=BY_
   const u=$("#liveundo");if(u)u.onclick=()=>{undoLast(r);b.hidden=true;updateLiveUI();};
   const f=$("#livefix");if(f)f.onclick=()=>{const item=S.review[S.review.length-1];if(item)openMatchSheet(item,true);};
 }
-function undoLast(r){const card=BY_ID[r.guess];const k=pk(card.id,r.print.set,r.print.num);const e=S.col[k];if(e){e.copies.pop();if(!e.copies.length)delete S.col[k];}const i=S.session.map(x=>x.id+x.set+x.num).lastIndexOf(card.id+r.print.set+r.print.num);if(i>-1)S.session.splice(i,1);save();toast("Removed "+card.name);}
+function undoLast(r){const card=BY_ID[r.guess];const k=pk(card.id,r.print.set,r.print.num);removeLastCopy(k);const i=S.session.map(x=>x.id+x.set+x.num).lastIndexOf(card.id+r.print.set+r.print.num);if(i>-1)S.session.splice(i,1);save();toast("Removed "+card.name);}
 let audioCtx=null;
 function feedback(soft){try{if(navigator.vibrate)navigator.vibrate(soft?[20,40,20]:35);}catch(e){}
   if(!live.sound)return;try{audioCtx=audioCtx||new (window.AudioContext||window.webkitAudioContext)();const o=audioCtx.createOscillator(),gn=audioCtx.createGain();o.type="sine";o.frequency.value=soft?440:880;gn.gain.value=.0001;o.connect(gn);gn.connect(audioCtx.destination);const t=audioCtx.currentTime;gn.gain.exponentialRampToValueAtTime(.15,t+.01);gn.gain.exponentialRampToValueAtTime(.0001,t+(soft?.18:.09));o.start(t);o.stop(t+.2);}catch(e){}}
@@ -797,7 +814,7 @@ function rScan(){
   const ls=$("#livesound");if(ls)ls.onclick=()=>{live.sound=!live.sound;S.prefs=S.prefs||{};S.prefs.sound=live.sound;save();rScan();};
   const vid=$("#video");if(vid&&stream){vid.srcObject=stream;vid.play().catch(()=>{});if(live.on){getOCR().then(()=>{setLiveHint("");startLive();});}}
   if(camOn)updateLiveUI();
-  $("#endses").onclick=()=>{const n=S.session.length;closeCamera();S.session=[];save();rScan();toast(n?`Session closed · ${n} added`:"Session closed");};
+  $("#endses").onclick=()=>{const n=S.session.length;closeCamera();S.session=[];save();scheduleSync(0);rScan();toast(n?`Session closed · ${n} added`:"Session closed");};
   const sc=$("#scancancel");if(sc)sc.onclick=()=>{cancelScan();if(camOn)updateLiveUI();else rScan();toast("Scan cancelled");};
   el.querySelectorAll("[data-card]").forEach(b=>b.onclick=()=>go("card",{id:b.dataset.card}));
   const tr=$("#torev");if(tr)tr.onclick=()=>go("review");
@@ -831,7 +848,7 @@ function commitScan(r,opts={}){
   S.session.push({id:card.id,set:r.print.set,num:r.print.num,conf:r.conf});
   save();
   if(opts.quiet)return;
-  toast(`${card.name} · ${r.print.set.toUpperCase()} ${r.print.num} · now ×${ownedOf(card.id)}`,()=>{const k=pk(card.id,r.print.set,r.print.num);const e=S.col[k];if(e){e.copies.pop();if(!e.copies.length)delete S.col[k];}const i=S.session.map(s=>s.id+s.set+s.num).lastIndexOf(card.id+r.print.set+r.print.num);if(i>-1)S.session.splice(i,1);save();render();});
+  toast(`${card.name} · ${r.print.set.toUpperCase()} ${r.print.num} · now ×${ownedOf(card.id)}`,()=>{const k=pk(card.id,r.print.set,r.print.num);removeLastCopy(k);const i=S.session.map(s=>s.id+s.set+s.num).lastIndexOf(card.id+r.print.set+r.print.num);if(i>-1)S.session.splice(i,1);save();render();});
 }
 function openMatchSheet(r,fromReview){
   let pick={id:r.guess,set:r.print.set,num:r.print.num,conf:r.conf},showAll=false;
@@ -1050,7 +1067,7 @@ function rChecklist(){
   wantPrices(items.slice(0,PRICE_BATCH).map(x=>x.print));
 }
 function quickAdd(id,set,num){const card=BY_ID[id];if(!card)return;addCopy(S.col,id,set,num,{cond:"NM",foil:false,via:"typed",date:today()});invalidateStats();save();rChecklist();
-  toast(`${card.name} · ${set.toUpperCase()} ${num} · now ×${ownedPrint(id,set,num)}`,()=>{const k=pk(id,set,num);const e=S.col[k];if(e){e.copies.pop();if(!e.copies.length)delete S.col[k];}invalidateStats();save();if(view==="checklist")rChecklist();});}
+  toast(`${card.name} · ${set.toUpperCase()} ${num} · now ×${ownedPrint(id,set,num)}`,()=>{const k=pk(id,set,num);removeLastCopy(k);invalidateStats();save();if(view==="checklist")rChecklist();});}
 
 /* ========================= DECKS ========================= */
 function parseDeck(text){
@@ -1077,7 +1094,7 @@ function rDecks(){
   el.querySelectorAll("[data-deck]").forEach(b=>b.onclick=()=>go("deck",{id:b.dataset.deck}));
   $("#paste").onclick=()=>{$("#pastebox").hidden=false;$("#dtext").focus();};
   $("#pcancel").onclick=()=>{$("#pastebox").hidden=true;};
-  $("#psave").onclick=()=>{const text=$("#dtext").value;if(!text.trim())return;const d={id:"d"+Date.now(),name:$("#dname").value.trim()||"Pasted list",format:"Pasted",lines:parseDeck(text)};S.decks.unshift(d);save();go("deck",{id:d.id});};
+  $("#psave").onclick=()=>{const text=$("#dtext").value;if(!text.trim())return;const d={id:"d"+Date.now(),name:$("#dname").value.trim()||"Pasted list",format:"Pasted",lines:parseDeck(text),updatedAt:Date.now()};S.decks.unshift(d);save();go("deck",{id:d.id});};
 }
 function rDeck(){
   const d=S.decks.find(x=>x.id===curArg.id);if(!d){go("decks");return;}
@@ -1092,7 +1109,7 @@ function rDeck(){
     <div class="lst">${groups[g].map((l,i)=>({l,i})).sort((a,b)=>{const am=a.l.cardId?ownedOf(a.l.cardId)>=a.l.qty:false,bm=b.l.cardId?ownedOf(b.l.cardId)>=b.l.qty:false;return am-bm;}).map(({l,i})=>{const own=l.cardId?ownedOf(l.cardId):0;const ok=own>=l.qty;const card=l.cardId?BY_ID[l.cardId]:null;return `<button class="deckline ${ok?"ok":""}" data-line="${g}|${i}" ${card?"":"disabled"}><span class="qn">${l.qty}</span>${card?stripe(card,"min-height:26px;width:3px"):'<span class="stripe" style="min-height:26px;width:3px"></span>'}<span class="nm">${esc(l.name)}</span><span class="st">${card?(ok?"✓":own+" / "+l.qty):"not in index"}</span></button>`;}).join("")}</div>`).join("")}
   <div class="btnrow" style="margin-top:auto;padding-top:16px"><button class="btn" id="copymiss">Copy missing</button><button class="btn pri" id="scanfill">Scan to fill</button></div>`;
   $("#bk").onclick=()=>go("decks");
-  $("#del").onclick=()=>{const idx=S.decks.indexOf(d);S.decks.splice(idx,1);save();go("decks");toast(`Deleted ${d.name}`,()=>{S.decks.splice(idx,0,d);save();render();});};
+  $("#del").onclick=()=>{const idx=S.decks.indexOf(d);S.decks.splice(idx,1);S.deckTomb[d.id]=Date.now();save();go("decks");toast(`Deleted ${d.name}`,()=>{delete S.deckTomb[d.id];touchDeck(d);S.decks.splice(idx,0,d);save();render();});};
   el.querySelectorAll("[data-line]").forEach(b=>b.onclick=()=>{const [g,i]=b.dataset.line.split("|");const l=groups[g][+i];const own=ownedOf(l.cardId);if(own>=l.qty)go("card",{id:l.cardId});else openSuggestSheet(l,d);});
   $("#copymiss").onclick=()=>{const txt=d.lines.filter(l=>!l.cardId||ownedOf(l.cardId)<l.qty).map(l=>`${l.qty-(l.cardId?Math.min(l.qty,ownedOf(l.cardId)):0)} ${l.name}`).join("\n");copyText(txt,"Missing list copied");};
   $("#scanfill").onclick=()=>go("scan");
@@ -1110,7 +1127,7 @@ function openSuggestSheet(line,deck){
   <div class="lst">${sugg.length?sugg.map(o=>`<button class="row" data-swap="${esc(o.x.id)}" style="min-height:52px">${stripe(o.x)}${thumb(o.x,"sm")}<div class="tx"><div class="n">${esc(o.x.name)}</div><div class="d">${esc(o.why.join(" · "))}</div></div><span class="q own">×${ownedOf(o.x.id)}</span></button>`).join(""):'<div class="empty">Nothing you own shares its role and colours.</div>'}</div>
   <div class="note">Matched on type, subtypes and keywords only, offline. No price or metagame data involved.</div>
   <div class="btnrow"><button class="btn ghost" id="keep">Keep missing</button><button class="btn pri" id="addit">Add ${esc(card.name)}</button></div>`;
-  $("#sheet").querySelectorAll("[data-swap]").forEach(b=>b.onclick=()=>{const sub=BY_ID[b.dataset.swap];line.name=sub.name;line.cardId=sub.id;save();closeSheet();render();toast(`Swapped in ${sub.name}`);});
+  $("#sheet").querySelectorAll("[data-swap]").forEach(b=>b.onclick=()=>{const sub=BY_ID[b.dataset.swap];line.name=sub.name;line.cardId=sub.id;touchDeck(deck);save();closeSheet();render();toast(`Swapped in ${sub.name}`);});
   $("#keep").onclick=closeSheet;
   $("#addit").onclick=()=>{closeSheet();openAddSheet(card);};
   openSheet();
@@ -1224,6 +1241,13 @@ function rMore(){
   <div class="sect"><div>One colour for actions, one for what you own.</div>${schemeControls()}
     <div class="note" style="margin-top:14px">Appearance</div>
     <div class="chips" style="margin-top:6px">${[["system","Match system"],["dark","Dark"],["light","Light"]].map(([k,l])=>`<button class="chip ${(S.prefs&&S.prefs.appearance||"system")===k?"on":""}" data-appear="${k}" aria-pressed="${(S.prefs&&S.prefs.appearance||"system")===k}">${l}</button>`).join("")}</div></div>
+  <div class="h">Google Drive</div>
+  ${(()=>{const g=S.prefs.gdrive||{};
+    if(!driveConfigured())return `<div class="sect"><div>Sync across devices</div><div class="note" style="margin-top:2px">Not set up on this install. A Google OAuth client ID in <span class="mono">js/binder.js</span> turns it on; your collection then lives as one file in your own Drive.</div></div>`;
+    if(!g.on)return `<div class="sect"><div>Keep your collection the same on every device you sign into.</div><div class="note" style="margin-top:2px">Stored as one file in your own Google Drive, in a folder called Binder. Binder can only see files it created. Changes merge: nothing you add on one phone overwrites another.</div>
+      <button class="btn pri" id="gdon" style="margin-top:10px">Sync with Google Drive</button></div>`;
+    return `<div class="sect"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px"><div><div>Google Drive</div><div class="note" style="margin-top:2px">${esc(syncStatusLine())}</div></div>${sync.needAuth?'<button class="btn sm pri" id="gdsignin">Sign in</button>':`<button class="btn sm" id="gdsync" ${sync.busy?"disabled":""}>Sync now</button>`}</div>
+      <div class="btnrow" style="margin-top:10px">${g.link?`<a class="btn" href="${esc(g.link)}" target="_blank" rel="noopener">Open in Drive</a>`:""}<button class="btn ghost" id="gdoff">Turn off</button></div></div>`;})()}
   <div class="h">Bottom bar</div>
   <div class="sect"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px"><div><div>${pins().map(k=>DEST[k].label).join(" · ")}</div><div class="note" style="margin-top:2px">${(()=>{const m=ARCHETYPES.find(a=>a.pins.join()===pins().join());return m?"Preset: "+m.name:"Custom";})()}. The first one is your home screen.</div></div><button class="btn sm" id="editbar">Edit</button></div></div>
   <div class="sect"><div style="display:flex;justify-content:space-between"><span>Collection</span><span class="mono">${totalOwned()} cards</span></div><div style="display:flex;justify-content:space-between;margin-top:6px"><span>Printings</span><span class="mono">${Object.keys(S.col).length}</span></div><div style="display:flex;justify-content:space-between;margin-top:6px"><span>Index</span><span class="mono">${INDEX.length.toLocaleString()} cards · ${Object.keys(SETS).length} sets</span></div><div style="display:flex;justify-content:space-between;margin-top:6px"><span>Index built</span><span class="mono">2026-10-17</span></div><div style="display:flex;justify-content:space-between;margin-top:6px"><span>OCR engine</span><span class="mono" id="ocrstate">${ocrState==="ready"?"ready":ocrState==="failed"?"unavailable":ocrState==="loading"?"starting…":"starts on first scan"}</span></div><div style="display:flex;justify-content:space-between;margin-top:6px"><span>Auto-accept threshold</span><span class="mono">${THRESHOLD}%</span></div><div style="display:flex;justify-content:space-between;margin-top:6px"><span>App version</span><span class="mono">${APP_VERSION}</span></div></div>
@@ -1267,7 +1291,11 @@ function rMore(){
   $("#editbar").onclick=openPinEditor;
   $("#imgtoggle").onclick=()=>{S.prefs=S.prefs||{};S.prefs.images=!imagesOn();save();rMore();};
   wireSchemeControls(el,()=>rMore());
-  el.querySelectorAll("[data-appear]").forEach(b=>b.onclick=()=>{S.prefs=S.prefs||{};S.prefs.appearance=b.dataset.appear;save();applyScheme();rMore();});
+  const gon=$("#gdon");if(gon)gon.onclick=()=>{gon.disabled=true;gon.textContent="Opening Google…";connectDrive().finally(()=>{if(view==="more")rMore();});};
+  const gsy=$("#gdsync");if(gsy)gsy.onclick=()=>{rMore();syncNow("manual").then(r=>{if(r&&!r.added&&!r.removed)toast("Up to date");if(view==="more")rMore();});};
+  const gsi=$("#gdsignin");if(gsi)gsi.onclick=()=>{signIn().then(()=>{sync.needAuth=false;rMore();syncNow("signin");}).catch(e=>toast(e.message));};
+  const gof=$("#gdoff");if(gof)gof.onclick=disconnectDrive;
+  el.querySelectorAll("[data-appear]").forEach(b=>b.onclick=()=>{S.prefs=S.prefs||{};S.prefs.appearance=b.dataset.appear;touchPrefs();save();applyScheme();rMore();});
   const dg=$("#diagtoggle");if(dg)dg.onclick=()=>{S.prefs=S.prefs||{};S.prefs.diag=!S.prefs.diag;save();rMore();};
   const wm=$("#warm");if(wm)wm.onclick=async()=>{wm.disabled=true;wm.textContent="Starting…";await getOCR();rMore();toast(ocrState==="ready"?"OCR ready":"OCR couldn't start");};
 }
@@ -1278,6 +1306,134 @@ function copyText(txt,msg){
 }
 
 /* ========================= BOOT ========================= */
+/* ========================= SYNC · Google Drive ========================= */
+/* One file in the user's own Drive (scope drive.file: the app sees only files it created). Sync is a
+   merge, never an overwrite: union of copies minus tombstones, newest deck wins, newest prefs win, so
+   "save", "import" and "sync" are the same operation and there is no conflict to show. Auth is the
+   browser OAuth flow with no SDK: a popup (or tab, in an installed app) to Google, back to oauth.html,
+   which stores the token and tells this page. Tokens last an hour; background syncs that find one
+   expired simply wait for the next user-initiated action. */
+const GDRIVE_CLIENT_ID="";
+const GDRIVE_SCOPE="https://www.googleapis.com/auth/drive.file";
+const DRIVE=Object.assign({api:"https://www.googleapis.com/drive/v3",upload:"https://www.googleapis.com/upload/drive/v3",auth:"https://accounts.google.com/o/oauth2/v2/auth"},(typeof window!=="undefined"&&window.BINDER_DRIVE)||{});
+const SYNC_FILE="collection.json",SYNC_FOLDER="Binder",TOKEN_KEY="binder-gdrive-token";
+const sync={busy:false,timer:null,lastHash:null,lastRev:null,err:null,needAuth:false,waiting:null};
+function deviceId(){let d=null;try{d=localStorage.getItem("binder-device");if(!d){d=cid();localStorage.setItem("binder-device",d);}}catch(e){d=d||"dev";}return d;}
+function driveOn(){return !!(S&&S.prefs&&S.prefs.gdrive&&S.prefs.gdrive.on);}
+function driveConfigured(){return !!GDRIVE_CLIENT_ID||!!(typeof window!=="undefined"&&window.BINDER_DRIVE);}
+/* --- the document that travels --- */
+const SYNC_PREFS=["pins","archetype","scheme","schemeAcc","schemeOwn","appearance","live","sound"];
+function syncDoc(st){st=st||S;const prefs={};for(const k of SYNC_PREFS)if(st.prefs&&st.prefs[k]!==undefined)prefs[k]=st.prefs[k];
+  return {v:1,at:Date.now(),device:deviceId(),col:st.col,tomb:st.tomb||{},decks:st.decks,deckTomb:st.deckTomb||{},prefs,prefsAt:st.prefsAt||0,hist:st.hist||[]};}
+function docHash(doc){const o={col:doc.col,tomb:doc.tomb,decks:doc.decks,deckTomb:doc.deckTomb,prefs:doc.prefs,prefsAt:doc.prefsAt,hist:doc.hist};return fnv(JSON.stringify(o));}
+function copyIds(col){const s=new Set();for(const k in col)for(const c of col[k].copies)if(c.id)s.add(c.id);return s;}
+/* Merge two documents into a third. Commutative and idempotent. */
+function mergeDocs(a,b){
+  const tomb={};for(const src of [a.tomb||{},b.tomb||{}])for(const id in src)tomb[id]=Math.max(tomb[id]||0,src[id]);
+  const col={};
+  for(const src of [a.col||{},b.col||{}])for(const k in src){const e=src[k];if(!e||!e.copies)continue;const t=col[k]||(col[k]={id:e.id,set:e.set,num:e.num,copies:[]});
+    for(const c of e.copies){if(!c||!c.id||tomb[c.id])continue;if(!t.copies.some(x=>x.id===c.id))t.copies.push(c);}}
+  for(const k in col){if(!col[k].copies.length)delete col[k];else col[k].copies.sort((x,y)=>String(x.date||"").localeCompare(String(y.date||""))||String(x.id).localeCompare(String(y.id)));}
+  const deckTomb={};for(const src of [a.deckTomb||{},b.deckTomb||{}])for(const id in src)deckTomb[id]=Math.max(deckTomb[id]||0,src[id]);
+  const decks={};for(const src of [a.decks||[],b.decks||[]])for(const d of src){if(!d||!d.id)continue;const cur=decks[d.id];if(!cur||(d.updatedAt||0)>(cur.updatedAt||0))decks[d.id]=d;}
+  const deckList=Object.values(decks).filter(d=>!((deckTomb[d.id]||0)>(d.updatedAt||0))).sort((x,y)=>(y.updatedAt||0)-(x.updatedAt||0));
+  const newerPrefs=(b.prefsAt||0)>(a.prefsAt||0)?b:a;
+  const hist={};for(const src of [a.hist||[],b.hist||[]])for(const h of src){if(!h||!h.d)continue;const cur=hist[h.d];if(!cur||(h.k||0)>(cur.k||0))hist[h.d]=h;}
+  const histList=Object.values(hist).sort((x,y)=>x.d.localeCompare(y.d)).slice(-730);
+  return {v:1,at:Math.max(a.at||0,b.at||0),col,tomb,decks:deckList,deckTomb,prefs:Object.assign({},newerPrefs.prefs||{}),prefsAt:newerPrefs.prefsAt||0,hist:histList};
+}
+/* Write a merged document into S. Returns what changed for the toast. */
+function applyDoc(doc){
+  const before=copyIds(S.col);
+  S.col={};for(const k in doc.col){const e=doc.col[k];if(!BY_ID[e.id])continue;S.col[k]={id:e.id,set:e.set,num:e.num,copies:e.copies.slice()};}
+  S.tomb=doc.tomb||{};S.decks=doc.decks||[];S.deckTomb=doc.deckTomb||{};S.hist=doc.hist||[];
+  if((doc.prefsAt||0)>=(S.prefsAt||0)){for(const k of SYNC_PREFS)if(doc.prefs&&doc.prefs[k]!==undefined)S.prefs[k]=doc.prefs[k];S.prefsAt=doc.prefsAt||0;}
+  const after=copyIds(S.col);let added=0,removed=0;for(const id of after)if(!before.has(id))added++;for(const id of before)if(!after.has(id))removed++;
+  invalidateStats();if(typeof live!=="undefined"){live.on=S.prefs.live!==false;live.sound=S.prefs.sound!==false;}
+  return {added,removed};
+}
+/* --- token --- */
+function readToken(){try{const t=JSON.parse(localStorage.getItem(TOKEN_KEY)||"null");return t&&t.exp>Date.now()+30000?t.access_token:null;}catch(e){return null;}}
+function clearToken(){try{localStorage.removeItem(TOKEN_KEY);}catch(e){}}
+function authUrl(prompt){const state=cid();try{localStorage.setItem("binder-oauth-state",state);}catch(e){}
+  const redirect=new URL("oauth.html",document.baseURI).href;
+  const q=new URLSearchParams({client_id:GDRIVE_CLIENT_ID,redirect_uri:redirect,response_type:"token",scope:GDRIVE_SCOPE,state,include_granted_scopes:"true"});if(prompt)q.set("prompt",prompt);
+  return DRIVE.auth+"?"+q.toString();}
+/* Interactive sign-in: open Google, wait for oauth.html to store a token (it tells us over a BroadcastChannel; storage and visibility events cover the installed-app case). */
+function signIn(prompt){
+  if(readToken())return Promise.resolve(readToken());
+  if(!GDRIVE_CLIENT_ID)return Promise.reject(new Error("Google Drive isn't set up for this install"));
+  return new Promise((res,rej)=>{
+    const done=()=>{const t=readToken();if(t){cleanup();res(t);}};
+    const fail=msg=>{cleanup();rej(new Error(msg));};
+    const onStore=e=>{if(e.key===TOKEN_KEY)done();};const onVis=()=>{if(document.visibilityState==="visible")done();};
+    let bc=null;try{bc=new BroadcastChannel("binder-sync");bc.onmessage=e=>{if(e.data&&e.data.type==="token")done();else if(e.data&&e.data.type==="error")fail(e.data.error||"Sign-in failed");};}catch(e){}
+    const to=setTimeout(()=>fail("Sign-in timed out"),180000);
+    function cleanup(){clearTimeout(to);window.removeEventListener("storage",onStore);document.removeEventListener("visibilitychange",onVis);if(bc)bc.close();}
+    window.addEventListener("storage",onStore);document.addEventListener("visibilitychange",onVis);
+    const w=window.open(authUrl(prompt),"binder-oauth","popup,width=480,height=680");
+    if(!w){cleanup();location.assign(authUrl(prompt));}
+  });
+}
+/* --- transport --- */
+async function driveFetch(url,opts){const t=readToken();if(!t){sync.needAuth=true;throw new Error("signed out");}
+  const o=Object.assign({},opts||{});o.headers=Object.assign({Authorization:"Bearer "+t},o.headers||{});
+  const r=await fetch(url,o);if(r.status===401){clearToken();sync.needAuth=true;throw new Error("signed out");}if(!r.ok)throw new Error("Drive error "+r.status);return r;}
+async function driveFind(){const q=encodeURIComponent("appProperties has { key='binder' and value='collection' } and trashed=false");
+  const r=await driveFetch(`${DRIVE.api}/files?q=${q}&fields=files(id,headRevisionId,modifiedTime,webViewLink,size)&spaces=drive&pageSize=5`);const j=await r.json();return (j.files&&j.files[0])||null;}
+async function driveFolder(){const q=encodeURIComponent("appProperties has { key='binder' and value='folder' } and trashed=false and mimeType='application/vnd.google-apps.folder'");
+  const r=await driveFetch(`${DRIVE.api}/files?q=${q}&fields=files(id)&pageSize=1`);const j=await r.json();if(j.files&&j.files[0])return j.files[0].id;
+  const c=await driveFetch(`${DRIVE.api}/files?fields=id`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name:SYNC_FOLDER,mimeType:"application/vnd.google-apps.folder",appProperties:{binder:"folder"}})});return (await c.json()).id;}
+async function driveCreate(doc){const folder=await driveFolder();const meta={name:SYNC_FILE,mimeType:"application/json",parents:[folder],appProperties:{binder:"collection"}};
+  const b="binder"+cid();const body=`--${b}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(meta)}\r\n--${b}\r\nContent-Type: application/json\r\n\r\n${JSON.stringify(doc)}\r\n--${b}--`;
+  const r=await driveFetch(`${DRIVE.upload}/files?uploadType=multipart&fields=id,headRevisionId,webViewLink`,{method:"POST",headers:{"Content-Type":"multipart/related; boundary="+b},body});return r.json();}
+async function driveUpdate(id,doc){const r=await driveFetch(`${DRIVE.upload}/files/${id}?uploadType=media&fields=id,headRevisionId,webViewLink`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify(doc)});return r.json();}
+async function driveDownload(id){const r=await driveFetch(`${DRIVE.api}/files/${id}?alt=media`);return r.json();}
+/* --- the sync pass --- */
+function scheduleSync(ms){if(!driveOn()||sync.busy)return;clearTimeout(sync.timer);sync.timer=setTimeout(()=>syncNow("auto"),ms==null?20000:ms);}
+async function syncNow(reason){
+  if(!driveOn()||sync.busy)return null;clearTimeout(sync.timer);
+  if(!navigator.onLine)return null;
+  if(!readToken()){sync.needAuth=true;if(view==="more")rMore();return null;}
+  sync.busy=true;sync.err=null;let result=null;
+  try{
+    const local=syncDoc();const lh=docHash(local);
+    let file=S.prefs.gdrive.fileId?{id:S.prefs.gdrive.fileId}:null;
+    let remote=null;
+    if(!file){const f=await driveFind();if(f){file=f;S.prefs.gdrive.fileId=f.id;}}
+    if(file){try{remote=await driveDownload(file.id);}catch(e){if(/404/.test(e.message)){file=null;S.prefs.gdrive.fileId=null;}else throw e;}}
+    const merged=remote?mergeDocs(local,remote):local;
+    const mh=docHash(merged);
+    let change={added:0,removed:0};
+    if(mh!==lh){change=applyDoc(merged);}
+    if(!remote||docHash(remote)!==mh){const saved=file?await driveUpdate(file.id,merged):await driveCreate(merged);S.prefs.gdrive.fileId=saved.id||(file&&file.id);if(saved.webViewLink)S.prefs.gdrive.link=saved.webViewLink;}
+    sync.lastHash=mh;S.prefs.gdrive.lastSync=Date.now();sync.needAuth=false;
+    result=change;
+  }catch(e){sync.err=(e&&e.message)||String(e);if(/signed out/.test(sync.err))sync.needAuth=true;}
+  sync.busy=false;
+  try{localStorage.setItem(KEY,JSON.stringify(S));}catch(e){}
+  if(result&&(result.added||result.removed)){applyScheme();buildTabbar();render();const parts=[];if(result.added)parts.push(`${result.added} card${result.added>1?"s":""} added`);if(result.removed)parts.push(`${result.removed} removed`);toast(parts.join(", ")+" from your other device");}
+  else if(view==="more")rMore();
+  return result;
+}
+/* --- connect / disconnect --- */
+async function connectDrive(){
+  try{await signIn();}catch(e){toast(e.message||"Sign-in failed");return;}
+  S.prefs.gdrive={on:false};
+  let remote=null,file=null;
+  try{file=await driveFind();if(file)remote=await driveDownload(file.id);}catch(e){toast("Couldn't reach Drive: "+e.message);return;}
+  const localN=totalOwned();const remoteN=remote?Object.values(remote.col||{}).reduce((a,e)=>a+e.copies.length,0):0;
+  const start=()=>{S.prefs.gdrive={on:true,fileId:file?file.id:null,link:file&&file.webViewLink||null,connectedAt:Date.now()};save();rMore();syncNow("connect").then(()=>{toast(remote?"Merged with your Drive copy":"Synced to Drive");if(view==="more")rMore();});};
+  if(remote&&remoteN&&localN){
+    $("#sheet").innerHTML=`<div class="grab"></div><div style="font-weight:700;font-size:17px">Found your Binder in Drive</div>
+    <div class="note" style="margin-top:4px">${remoteN} card${remoteN>1?"s":""}, last synced ${ago(remote.at)}. This device has ${localN}. Merging keeps every copy from both and any card you removed on either stays removed.</div>
+    <div class="btnrow"><button class="btn ghost" id="syncno">Cancel</button><button class="btn pri" id="syncgo">Merge</button></div>`;
+    $("#syncno").onclick=()=>closeSheet();$("#syncgo").onclick=()=>{closeSheet();start();};openSheet();
+  }else start();
+}
+function disconnectDrive(){S.prefs.gdrive={on:false};clearToken();sync.needAuth=false;sync.err=null;save();rMore();toast("Sync turned off. Your Drive file stays as it is.");}
+function syncStatusLine(){const g=S.prefs.gdrive||{};if(sync.busy)return "Syncing…";if(sync.needAuth)return "Sign in to keep syncing";if(sync.err)return "Last try failed: "+sync.err+(g.lastSync?" · last synced "+ago(g.lastSync):"");if(g.lastSync)return "Synced "+ago(g.lastSync);return "Not synced yet";}
+
 (async function boot(){
   try{await loadIndex();}
   catch(e){const t=document.getElementById("ldmsg");if(t)t.textContent="Couldn't load the card index ("+((e&&e.message)||e)+"). Reload to try again.";return;}
@@ -1299,13 +1455,14 @@ function copyText(txt,msg){
   else{if(!(S.prefs&&S.prefs.onboarded)){S.prefs=S.prefs||{};S.prefs.onboarded=true;S.prefs.archetype="custom";save();}$("#tabbar").hidden=false;render();}
   if(TABS.includes(view))try{history.replaceState({tab:view},"","#"+view);}catch(e){} /* base entry carries the tab, so back from a tray navigation returns here */
   try{setupUpdates();}catch(e){}
+  if(driveOn()){setTimeout(()=>syncNow("boot"),1500);document.addEventListener("visibilitychange",()=>{if(document.visibilityState==="hidden")syncNow("hide");else scheduleSync(2000);});window.addEventListener("online",()=>scheduleSync(1000));}
   wantOwnedPrices();
   if(S.prefs){if(S.prefs.live===false)live.on=false;if(S.prefs.sound===false)live.sound=false;}
   window.addEventListener("online",()=>{wantOwnedPrices();});
 })();
 /* After a deploy the old cached app runs once while the new service worker installs.
    When the new one takes over, reload once so the new build is what you see. */
-const APP_VERSION="20261018k";
+const APP_VERSION="20261018l";
 let swReg=null;
 function setupUpdates(){
   if(!("serviceWorker" in navigator))return;
