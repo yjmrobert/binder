@@ -103,7 +103,7 @@ function thumb(card,size,extra="",print){const k=ciClass(card);const st=k==="M"?
   return `<div ${st} aria-hidden="true"><div class="ttl">${esc(card.name)}</div><div class="art"></div>${ft}${img}${extra}</div>`;}
 function pr(p){return p.set.toUpperCase()+" "+p.num;}
 function ownedPrints(id){return Object.values(S.col).filter(e=>e.id===id).sort((a,b)=>b.copies.length-a.copies.length);}
-function toast(msg,undo){const t=$("#toast");t.innerHTML=esc(msg)+(undo?'<button id="undo">Undo</button>':"");t.classList.add("on");clearTimeout(t._t);t._t=setTimeout(()=>t.classList.remove("on"),undo?5000:2400);if(undo)$("#undo").onclick=()=>{undo();t.classList.remove("on");};}
+function toast(msg,undo,label){const t=$("#toast");t.innerHTML=esc(msg)+(undo?'<button id="undo">'+esc(label||"Undo")+"</button>":"");t.classList.add("on");clearTimeout(t._t);t._t=setTimeout(()=>t.classList.remove("on"),undo?5000:2400);if(undo)$("#undo").onclick=()=>{undo();t.classList.remove("on");};}
 function today(){return new Date().toISOString().slice(0,10);}
 
 /* ========================= PRICES =========================
@@ -132,7 +132,7 @@ async function pumpPrices(){
       const j=await res.json();S.prices=S.prices||{};const now=Date.now();
       for(const c of (j.data||[])){const pr=c.prices||{};S.prices[c.id.replace(/-/g,"")]={usd:pr.usd,usd_foil:pr.usd_foil,usd_etched:pr.usd_etched,eur:pr.eur,eur_foil:pr.eur_foil,at:now};}
       for(const nf of (j.not_found||[])){const id=(nf.id||"").replace(/-/g,"");if(id)S.prices[id]={at:now};}
-      priceErr="";save();snapshotValue();rerender();
+      priceErr="";save();snapshotValue();rerender();if(sheetRefresh&&sheetOpen())try{sheetRefresh();}catch(e){}
       if(priceQueue.size)await new Promise(r=>setTimeout(r,150));
     }
   }catch(e){priceErr=(e&&e.message)||String(e);}
@@ -459,14 +459,14 @@ function openAddSheet(card,prefer){
   };
   draw();openSheet();
 }
-let sheetReturn=null,pendingBack=false;
+let sheetReturn=null,pendingBack=false,sheetRefresh=null;
 /* A sheet owns one history entry. Closing it pops that entry, but only after the current task:
    if another sheet opens, or go() navigates, in the same tick, that entry is reused instead,
    so the deferred popstate can never undo the navigation. */
 function sheetOpen(){return $("#overlay").classList.contains("on");}
 function openSheet(){const ov=$("#overlay");if(!ov.classList.contains("on")){if(pendingBack)pendingBack=false;else{sheetReturn=document.activeElement;try{history.pushState({sheet:true},"");}catch(e){}}}ov.classList.add("on");
   requestAnimationFrame(()=>{const f=$("#sheet").querySelector("input,button:not([disabled])");if(f&&!/input/i.test(f.tagName))f.focus({preventScroll:true});else if(f)f.focus();});}
-function closeSheet(fromHistory){const ov=$("#overlay");if(!ov.classList.contains("on"))return;ov.classList.remove("on");
+function closeSheet(fromHistory){const ov=$("#overlay");if(!ov.classList.contains("on"))return;ov.classList.remove("on");sheetRefresh=null;
   if(!fromHistory&&history.state&&history.state.sheet){pendingBack=true;setTimeout(()=>{if(!pendingBack)return;pendingBack=false;if(!ov.classList.contains("on"))try{history.back();}catch(e){}},0);}
   if(sheetReturn&&sheetReturn.focus&&document.contains(sheetReturn))sheetReturn.focus({preventScroll:true});sheetReturn=null;}
 $("#overlay").onclick=e=>{if(e.target===$("#overlay"))closeSheet();};
@@ -814,7 +814,7 @@ function rScan(){
   const ls=$("#livesound");if(ls)ls.onclick=()=>{live.sound=!live.sound;S.prefs=S.prefs||{};S.prefs.sound=live.sound;save();rScan();};
   const vid=$("#video");if(vid&&stream){vid.srcObject=stream;vid.play().catch(()=>{});if(live.on){getOCR().then(()=>{setLiveHint("");startLive();});}}
   if(camOn)updateLiveUI();
-  $("#endses").onclick=()=>{const n=S.session.length;closeCamera();S.session=[];save();scheduleSync(0);rScan();toast(n?`Session closed · ${n} added`:"Session closed");};
+  $("#endses").onclick=()=>{const n=S.session.length;const sets=[...new Set(S.session.map(x=>x.set).filter(Boolean))];closeCamera();S.session=[];save();scheduleSync(0);rScan();toast(n?`Session closed · ${n} added`:"Session closed");if(n)checkMilestones(sets);};
   const sc=$("#scancancel");if(sc)sc.onclick=()=>{cancelScan();if(camOn)updateLiveUI();else rScan();toast("Scan cancelled");};
   el.querySelectorAll("[data-card]").forEach(b=>b.onclick=()=>go("card",{id:b.dataset.card}));
   const tr=$("#torev");if(tr)tr.onclick=()=>go("review");
@@ -1049,10 +1049,12 @@ function rChecklist(){
   <div class="bar" style="margin-top:8px"><i style="width:${pct}%"></i></div>
   <div class="mu" style="font-size:12px;margin-top:6px">${cl.known?`worth ${fmt(cl.value)}${cl.known<cl.owned?" (partial)":""} · `:""}${cl.missing} missing${kind==="set"&&cl.vOwned?` · ${cl.vOwned} of ${cl.variants.length} variants`:""}${kind==="type"&&cl.mOwned?` · ${cl.mOwned} maker${cl.mOwned>1?"s":""} owned`:""}${kind==="type"&&cl.cOwned?` · ${cl.cOwned} changeling${cl.cOwned>1?"s":""} owned`:""}</div>
   ${ms?`<div class="mu" style="font-size:12px;margin-top:2px">${esc(ms)}</div>`:""}
+  ${kind==="set"&&cl.missing?`<button class="btn sm" id="basket" style="margin-top:10px">Finish the set · ${cl.missing} missing</button>`:""}
   <div class="chips rail" style="margin-top:12px">${chips.map(([k,l,n])=>`<button class="chip ${st.chip===k?"on":""}" data-chip="${k}">${l} <span class="mono cnt">${n}</span></button>`).join("")}</div>
   ${rar}
   ${items.length?(listMode?`<div class="lst" style="margin-top:8px">${items.map(rowi).join("")}</div>`:`<div class="slots cols${st.cols}" id="slots" style="margin-top:10px">${items.map(cell).join("")}</div>`):'<div class="empty">Nothing here with these filters.</div>'}`;
   $("#bk").onclick=()=>{if(stack.length)back();else go(kind==="set"?"sets":"types");};
+  const bsk=$("#basket");if(bsk)bsk.onclick=()=>openBasketSheet(cl);
   el.querySelectorAll("[data-chip]").forEach(b=>b.onclick=()=>{st.chip=b.dataset.chip;rChecklist();});
   el.querySelectorAll("[data-rar]").forEach(b=>b.onclick=()=>{st.rarity=st.rarity===+b.dataset.rar?null:+b.dataset.rar;rChecklist();});
   el.querySelectorAll("[data-grp]").forEach(b=>b.onclick=()=>{st.group=b.dataset.grp;rChecklist();});
@@ -1301,7 +1303,7 @@ async function importFile(file){
   <div class="lst">${ok.slice(0,6).map(({l,r})=>`<div class="row" style="min-height:44px">${stripe(r.card)}${thumb(r.card,"sm","",r.print)}<div class="tx"><div class="n">${esc(r.card.name)}</div><div class="d">${pr(r.print)} · ${l.foil?"foil · ":""}${l.cond}</div></div><span class="q own">×${l.qty}</span></div>`).join("")}${ok.length>6?`<div class="note">and ${ok.length-6} more lines</div>`:""}</div>
   <div class="btnrow"><button class="btn ghost" id="impcancel">Cancel</button><button class="btn pri" id="impok" ${ok.length?"":"disabled"}>Add ${copies} cop${copies===1?"y":"ies"}</button></div>`;
   $("#impcancel").onclick=closeSheet;
-  $("#impok").onclick=()=>{const d=today();for(const {l,r} of ok)for(let i=0;i<l.qty;i++)addCopy(S.col,r.card.id,r.print.set,r.print.num,{cond:l.cond,foil:l.foil,via:"import",date:d});save();closeSheet();wantOwnedPrices();render();toast(`Imported ${copies} copies from ${file.name}`);};
+  $("#impok").onclick=()=>{const d=today();for(const {l,r} of ok)for(let i=0;i<l.qty;i++)addCopy(S.col,r.card.id,r.print.set,r.print.num,{cond:l.cond,foil:l.foil,via:"import",date:d});save();closeSheet();wantOwnedPrices();render();toast(`Imported ${copies} copies from ${file.name}`);checkMilestones([...new Set(ok.map(x=>x.r.print.set))]);};
   openSheet();
 }
 async function restoreBackup(file){
@@ -1325,6 +1327,7 @@ function rMore(){
   <div class="sect"><div>One colour for actions, one for what you own.</div>${schemeControls()}
     <div class="note" style="margin-top:14px">Appearance</div>
     <div class="chips" style="margin-top:6px">${[["system","Match system"],["dark","Dark"],["light","Light"]].map(([k,l])=>`<button class="chip ${(S.prefs&&S.prefs.appearance||"system")===k?"on":""}" data-appear="${k}" aria-pressed="${(S.prefs&&S.prefs.appearance||"system")===k}">${l}</button>`).join("")}</div></div>
+  ${supportConfigured()?`<div class="h">Support Binder</div><div class="sect"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px"><div><div>Free, no ads, no accounts.</div><div class="note" style="margin-top:2px">If Binder has earned a place in your collecting.</div></div><button class="btn sm pri" id="buyland">Buy me a land</button></div></div>`:""}
   <div class="h">Google Drive</div>
   ${(()=>{const g=S.prefs.gdrive||{};
     if(!driveConfigured())return `<div class="sect"><div>Sync across devices</div><div class="note" style="margin-top:2px">Not set up on this install. A Google OAuth client ID in <span class="mono">js/binder.js</span> turns it on; your collection then lives as one file in your own Drive.</div></div>`;
@@ -1372,6 +1375,7 @@ function rMore(){
   $("#editbar").onclick=openPinEditor;
   $("#imgtoggle").onclick=()=>{S.prefs=S.prefs||{};S.prefs.images=!imagesOn();save();rMore();};
   wireSchemeControls(el,()=>rMore());
+  const bl=$("#buyland");if(bl)bl.onclick=()=>openSupportSheet("settings");
   const gon=$("#gdon");if(gon)gon.onclick=()=>{gon.disabled=true;gon.textContent="Opening Google…";connectDrive().finally(()=>{if(view==="more")rMore();});};
   const gsy=$("#gdsync");if(gsy)gsy.onclick=()=>{rMore();syncNow("manual").then(r=>{if(r&&!r.added&&!r.removed)toast("Up to date");if(view==="more")rMore();});};
   const gsi=$("#gdsignin");if(gsi)gsi.onclick=()=>{signIn().then(()=>{sync.needAuth=false;rMore();syncNow("signin");}).catch(e=>toast(e.message));};
@@ -1516,6 +1520,79 @@ async function connectDrive(){
 function disconnectDrive(){S.prefs.gdrive={on:false};clearToken();sync.needAuth=false;sync.err=null;save();rMore();toast("Sync turned off. Your Drive file stays as it is.");}
 function syncStatusLine(){const g=S.prefs.gdrive||{};if(sync.busy)return "Syncing…";if(sync.needAuth)return "Sign in to keep syncing";if(sync.err)return "Last try failed: "+sync.err+(g.lastSync?" · last synced "+ago(g.lastSync):"");if(g.lastSync)return "Synced "+ago(g.lastSync);return "Not synced yet";}
 
+/* ========================= SUPPORT · tips and the missing-cards basket ========================= */
+/* "Buy me a land": a tip jar. Every entry is optional; only configured ones show. Tiers are hosted
+   payment links (Stripe payment links, Ko-fi, Buy Me a Coffee, GitHub Sponsors); crypto is plain
+   addresses with wallet URIs. Nothing here touches a server of ours. */
+const SUPPORT={
+  tiers:[ // {land, amount, url} — leave url empty to hide a tier
+    {land:"Plains",amount:"$2",url:""},{land:"Island",amount:"$5",url:""},{land:"Swamp",amount:"$10",url:""},{land:"Mountain",amount:"$20",url:""},{land:"Forest",amount:"$50",url:""}],
+  any:[ // open-amount pages
+    {name:"Ko-fi",url:""},{name:"Buy Me a Coffee",url:""},{name:"GitHub Sponsors",url:""},{name:"PayPal",url:""}],
+  crypto:[ // {name, symbol, address, uri}
+    {name:"Bitcoin",symbol:"BTC",address:"",uri:a=>"bitcoin:"+a},{name:"Lightning",symbol:"LN",address:"",uri:a=>"lightning:"+a},{name:"Ethereum",symbol:"ETH",address:"",uri:a=>"ethereum:"+a}]
+};
+/* Store links for the missing-cards basket. Affiliate codes are optional; links work without them. */
+const STORES={
+  tcgPartner:"",          // Impact partner link, e.g. https://partner.tcgplayer.com/c/1234567/1830156/21018
+  cardKingdomPartner:"",  // Card Kingdom affiliate name, used as ?partner=NAME&utm_source=NAME&utm_medium=affiliate&utm_campaign=NAME
+  cardmarketQuery:""      // extra query string for Cardmarket links, e.g. utm_source=binder&utm_medium=text&utm_campaign=card_prices
+};
+function supportConfigured(){return SUPPORT.tiers.some(t=>t.url)||SUPPORT.any.some(a=>a.url)||SUPPORT.crypto.some(c=>c.address);}
+function openSupportSheet(from){
+  const tiers=SUPPORT.tiers.filter(t=>t.url),any=SUPPORT.any.filter(a=>a.url),crypto=SUPPORT.crypto.filter(c=>c.address);
+  const land=l=>({Plains:"W",Island:"U",Swamp:"B",Mountain:"R",Forest:"G"})[l]||"C";
+  $("#sheet").innerHTML=`<div class="grab"></div><div style="font-weight:700;font-size:17px">Buy me a land</div>
+  <div class="note" style="margin-top:2px">Binder is free and stays free: no accounts, no ads, nothing locked away. If it has earned a place in your collecting, a land keeps the index fresh and the scanner improving.</div>
+  ${tiers.length?`<div class="lands">${tiers.map(t=>`<a class="land" href="${esc(t.url)}" target="_blank" rel="noopener"><span class="pip ${land(t.land)}"></span>${t.land}<span class="amt">${esc(t.amount)}</span></a>`).join("")}</div>`:""}
+  ${any.length?`<div class="chips" style="margin-top:12px">${any.map(a=>`<a class="chip" href="${esc(a.url)}" target="_blank" rel="noopener">${esc(a.name)}</a>`).join("")}</div>`:""}
+  ${crypto.length?`<div class="h">Crypto</div><div class="lst">${crypto.map((c,i)=>`<div class="row" style="min-height:52px"><div class="tx"><div class="n">${esc(c.name)}</div><span class="addr">${esc(c.address)}</span></div><a class="btn sm" href="${esc(c.uri(c.address))}">Open wallet</a><button class="btn sm" data-copyaddr="${i}">Copy</button></div>`).join("")}</div>`:""}
+  ${!tiers.length&&!any.length&&!crypto.length?'<div class="empty">No ways to tip are set up on this install.</div>':""}
+  <div class="note" style="margin-top:12px">Thank you. Lands are not refundable, but neither is the joy of a finished set.</div>`;
+  $("#sheet").querySelectorAll("[data-copyaddr]").forEach(b=>b.onclick=()=>copyText(crypto[+b.dataset.copyaddr].address,crypto[+b.dataset.copyaddr].symbol+" address copied"));
+  openSheet();
+}
+/* One quiet nudge at a few moments of joy; never more than once per milestone, never on a fresh install. */
+function supportNudge(reason){
+  if(!supportConfigured())return;S.prefs.nudged=S.prefs.nudged||{};if(S.prefs.nudged[reason])return;
+  S.prefs.nudged[reason]=Date.now();save();
+  setTimeout(()=>toast(reason.startsWith("set:")?"Set complete. Enjoying Binder?":"Enjoying Binder?",()=>openSupportSheet(reason),"Buy me a land"),3800);
+}
+/* Called after a scan session or an import. `sets` are the codes touched, so a completed set can be noticed. */
+function checkMilestones(sets){
+  if(!supportConfigured())return;const seen=S.prefs.nudged||{};
+  for(const code of sets||[]){if(seen["set:"+code])continue;const cl=setChecklist(code);if(cl&&cl.total>=50&&cl.missing===0){supportNudge("set:"+code);return;}}
+  const n=totalOwned();for(const m of [100,500,1000,2500,5000])if(n>=m&&!seen["cards:"+m]){supportNudge("cards:"+m);return;}
+}
+/* --- the missing-cards basket --- */
+function tcgUrl(dest){return STORES.tcgPartner?STORES.tcgPartner+(STORES.tcgPartner.includes("?")?"&":"?")+"u="+encodeURIComponent(dest):dest;}
+function tcgMassEntry(lines){return tcgUrl("https://www.tcgplayer.com/massentry?productline=Magic&c="+encodeURIComponent(lines.join("||")));}
+function ckBuilder(lines){const p=STORES.cardKingdomPartner;const q=p?`?partner=${encodeURIComponent(p)}&utm_source=${encodeURIComponent(p)}&utm_medium=affiliate&utm_campaign=${encodeURIComponent(p)}`:"";
+  const f=document.createElement("form");f.method="POST";f.action="https://www.cardkingdom.com/builder"+q;f.target="_blank";f.rel="noopener";const i=document.createElement("input");i.type="hidden";i.name="c";i.value=lines.join("\n");f.appendChild(i);document.body.appendChild(f);f.submit();setTimeout(()=>f.remove(),1000);}
+function cmSearch(name){return "https://www.cardmarket.com/en/Magic/Products/Search?searchString="+encodeURIComponent(name)+(STORES.cardmarketQuery?"&"+STORES.cardmarketQuery:"");}
+function openBasketSheet(cl){
+  let filt=(S.prefs&&S.prefs.basketFilter)||"all";
+  const pick=()=>cl.slots.filter(x=>!x.owned&&(filt==="all"||(filt==="cheap"?x.print.rarity<=2:x.print.rarity>=3)));
+  const draw=()=>{
+    const items=pick();let total=0,known=0;for(const x of items){const v=priceOf(x.print);if(v!=null){total+=v;known++;}}
+    const lines=items.map(x=>`1 ${x.card.name} [${x.print.set.toUpperCase()}] ${x.print.num}`);
+    sheetRefresh=draw;
+    $("#sheet").innerHTML=`<div class="grab"></div><div style="font-weight:700;font-size:17px">Finish ${esc(cl.name)}</div>
+    <div class="note" style="margin-top:2px">${items.length} missing card${items.length===1?"":"s"}${known?`, about ${fmt(total)} at market${known<items.length?` (${items.length-known} unpriced)`:""}`:""}. Prices from Scryfall, TCGplayer market; stores quote their own.</div>
+    <div class="chips" style="margin-top:10px">${[["all","All missing"],["cheap","Commons and uncommons"],["rare","Rares and mythics"]].map(([k,l])=>`<button class="chip ${filt===k?"on":""}" data-bf="${k}">${l}</button>`).join("")}</div>
+    <div class="lst" style="margin-top:8px;max-height:220px;overflow:auto">${items.slice(0,40).map(x=>`<div class="row" style="min-height:40px">${stripe(x.card)}<div class="tx"><div class="n" style="font-weight:500">${esc(x.card.name)}</div><div class="d"><span>${pr(x.print)}</span></div></div><span class="q">${priceOf(x.print)!=null?fmt(priceOf(x.print)):""}</span></div>`).join("")}${items.length>40?`<div class="note">and ${items.length-40} more</div>`:""}</div>
+    <div class="stick"><div class="btnrow" style="margin-top:0"><a class="btn pri" href="${esc(tcgMassEntry(lines))}" target="_blank" rel="noopener" ${items.length?"":"aria-disabled=true"}>TCGplayer</a><button class="btn" id="bk-ck" ${items.length?"":"disabled"}>Card Kingdom</button></div>
+    <div class="btnrow" style="margin-top:8px"><button class="btn ghost" id="bk-copy" ${items.length?"":"disabled"}>Copy list</button><button class="btn ghost" id="bk-cm" ${items.length?"":"disabled"}>Cardmarket</button></div>
+    <div class="note" style="margin-top:8px">TCGplayer and Card Kingdom open with the list filled in. Cardmarket has no list import: that copies the list for a Wants list and opens a search.${STORES.tcgPartner||STORES.cardKingdomPartner?" Store links carry a referral code that supports Binder at no cost to you.":""}</div></div>`;
+    $("#sheet").querySelectorAll("[data-bf]").forEach(b=>b.onclick=()=>{filt=b.dataset.bf;S.prefs.basketFilter=filt;save();draw();});
+    $("#bk-ck").onclick=()=>ckBuilder(lines);
+    $("#bk-copy").onclick=()=>copyText(lines.join("\n"),"List copied");
+    $("#bk-cm").onclick=()=>{copyText(items.map(x=>`1 ${x.card.name}`).join("\n"),"List copied for Cardmarket Wants");window.open(cmSearch(items[0].card.name),"_blank","noopener");};
+  };
+  wantPrices(cl.slots.filter(x=>!x.owned).map(x=>x.print));
+  draw();openSheet();
+}
+
 (async function boot(){
   try{await loadIndex();}
   catch(e){const t=document.getElementById("ldmsg");if(t)t.textContent="Couldn't load the card index ("+((e&&e.message)||e)+"). Reload to try again.";return;}
@@ -1544,7 +1621,7 @@ function syncStatusLine(){const g=S.prefs.gdrive||{};if(sync.busy)return "Syncin
 })();
 /* After a deploy the old cached app runs once while the new service worker installs.
    When the new one takes over, reload once so the new build is what you see. */
-const APP_VERSION="20261018p";
+const APP_VERSION="20261018q";
 let swReg=null;
 function setupUpdates(){
   if(!("serviceWorker" in navigator))return;

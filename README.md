@@ -60,6 +60,17 @@ Then bump `DATA_VERSION` in `sw.js`. For app changes, bump `VERSION` in `sw.js`,
 
 `tools/` has nothing to run for this; a stand-in Drive server used in testing lives with the test scripts, not the app.
 
+## Supporting Binder (tip jar and store links)
+
+Binder has no paywall and no ads. Two optional, config-only ways to support a deployment live at the top of the `SUPPORT` section in `js/binder.js`:
+
+- `SUPPORT` is the "Buy me a land" tip jar. `tiers` are five hosted payment links named after the basic lands (Stripe payment links, Ko-fi, Buy Me a Coffee, anything that gives you a URL); `any` are open-amount pages (Ko-fi, GitHub Sponsors, PayPal); `crypto` are plain addresses, shown with a Copy button and a `bitcoin:` / `lightning:` / `ethereum:` wallet link. Every entry is optional and only configured ones appear. If nothing is configured the Settings card and the nudges are hidden entirely.
+- `STORES` adds referral codes to the **Finish the set** basket on a set checklist. `tcgPartner` is a TCGplayer Impact partner link (the basket wraps its mass-entry URL as `?u=`), `cardKingdomPartner` is a Card Kingdom affiliate name, `cardmarketQuery` is an extra query string. The basket works without any of them; the referral only changes who gets credit.
+
+Nudges are deliberately rare: one toast when the collection first crosses 100, 500, 1,000, 2,500 or 5,000 cards, and one when a set of 50+ cards is finished in a scan session or import. Each fires once per install (`prefs.nudged`).
+
+The basket builds a TCGplayer mass-entry URL (`1 Name [SET] 123`, lines joined by `||`), POSTs the same list to Card Kingdom's deck builder, and, since Cardmarket has no list import, copies the list for a Wants list and opens a search. The estimate uses Scryfall's TCGplayer market prices and is labelled as such.
+
 ## Completion rules
 
 A set's checklist is the printings whose collector number is a plain integer from 1 to the set's base size (from magic-search-engine; the highest plain number when absent). Numbers past that, or with a letter suffix, are variants: tracked and priced under their own chip, never counted toward completion and never in Missing. Each set counts only its own printings. Basics count like any other slot. Tokens, emblems and art cards are not in the index. A card belongs to a creature type when the type is on its type line; cards that only mention it in rules text are the Makes them group; changelings are their own group so they never pad a type's denominator.
