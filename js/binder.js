@@ -1135,6 +1135,90 @@ function openSuggestSheet(line,deck){
 
 /* ========================= IMPORT / EXPORT / BACKUP ========================= */
 function csvQuote(v){v=String(v==null?"":v);return /[",\n\r]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v;}
+/* ---- Export to other apps ----
+   One row per printing + finish + condition; each target writes its own headers and vocabulary
+   (set names, condition grades, finish words, language) so the file imports without remapping.
+   Headers and values follow each app's own export, which is what its importer accepts. Binder has
+   no language field, so everything is written as English. */
+function exportRows(){
+  const rows=[];
+  for(const e of Object.values(S.col)){const card=BY_ID[e.id];if(!card)continue;const p=card.prints.find(x=>x.set===e.set&&x.num===e.num)||{};
+    const groups={};for(const cp of e.copies){const k=(cp.foil?"F":"N")+"|"+(cp.cond||"NM");groups[k]=(groups[k]||0)+1;}
+    for(const k in groups){const [f,cond]=k.split("|");rows.push({name:card.name,front:card.name.split(" // ")[0],set:e.set,SET:e.set.toUpperCase(),setName:setName(e.set),num:e.num,foil:f==="F",cond,qty:groups[k],sid:p.sid?dashed(p.sid):"",rarity:RARITY[p.rarity]||""});}}
+  rows.sort((a,b)=>a.name.localeCompare(b.name)||a.set.localeCompare(b.set)||String(a.num).localeCompare(String(b.num),undefined,{numeric:true}));
+  return rows;
+}
+const CONDS={
+  manabox:{NM:"near_mint",LP:"good",MP:"light_played",HP:"played",DMG:"poor"},
+  moxfield:{NM:"Near Mint",LP:"Good (Lightly Played)",MP:"Played",HP:"Heavily Played",DMG:"Damaged"},
+  deckbox:{NM:"Near Mint",LP:"Good (Lightly Played)",MP:"Played",HP:"Heavily Played",DMG:"Poor"},
+  dragonshield:{NM:"NearMint",LP:"Good",MP:"LightPlayed",HP:"Played",DMG:"Poor"},
+  tcgplayer:{NM:"Near Mint",LP:"Lightly Played",MP:"Moderately Played",HP:"Heavily Played",DMG:"Damaged"},
+  archidekt:{NM:"NM",LP:"LP",MP:"MP",HP:"HP",DMG:"D"},
+  topdecked:{NM:"near mint",LP:"slightly played",MP:"moderately played",HP:"heavily played",DMG:"damaged"}
+};
+const cap=s=>s?s[0].toUpperCase()+s.slice(1):"";
+const EXPORTS=[
+  {id:"manabox",name:"ManaBox",kind:"csv",how:"ManaBox: Collection, the menu at the top right, Import, pick the file.",
+   head:["Name","Set code","Set name","Collector number","Foil","Rarity","Quantity","ManaBox ID","Scryfall ID","Purchase price","Misprint","Altered","Condition","Language","Purchase price currency"],
+   row:r=>[r.name,r.SET,r.setName,r.num,r.foil?"foil":"normal",r.rarity,r.qty,"",r.sid,"","false","false",CONDS.manabox[r.cond]||"near_mint","en",""]},
+  {id:"moxfield",name:"Moxfield",kind:"csv",how:"moxfield.com: Collection, Import, upload the CSV.",
+   head:["Count","Tradelist Count","Name","Edition","Condition","Language","Foil","Tags","Last Modified","Collector Number","Alter","Proxy","Purchase Price"],
+   row:r=>[r.qty,"",r.name,r.set,CONDS.moxfield[r.cond]||"Near Mint","English",r.foil?"foil":"","","",r.num,"","",""]},
+  {id:"archidekt",name:"Archidekt",kind:"csv",how:"archidekt.com: Collection, Import. Archidekt asks you to match columns; this file uses its own export layout, so every column has an obvious match.",
+   head:["Quantity","Name","Finish","Condition","Date Added","Language","Purchase Price","Tags","Edition Name","Edition Code","Multiverse Id","Scryfall ID","Collector Number"],
+   row:r=>[r.qty,r.name,r.foil?"Foil":"Normal",CONDS.archidekt[r.cond]||"NM","","EN","","",r.setName,r.SET,"",r.sid,r.num]},
+  {id:"deckbox",name:"Deckbox",kind:"csv",how:"deckbox.org: Mtg, your inventory, Import. Deckbox matches on set name and number and keeps the Scryfall id.",
+   head:["Count","Tradelist Count","Name","Edition","Edition Code","Card Number","Condition","Language","Foil","Signed","Artist Proof","Altered Art","Misprint","Promo","Textless","Printing Id","Printing Note","Tags","My Price","Cost","Rarity","Price","TcgPlayer ID","Scryfall ID"],
+   row:r=>[r.qty,"",r.name,r.setName,r.SET,r.num,CONDS.deckbox[r.cond]||"Near Mint","English",r.foil?"foil":"","","","","","","","","","","","","","","",r.sid]},
+  {id:"dragonshield",name:"Dragon Shield",kind:"csv",how:"Dragon Shield MTG Card Manager: Collection, Import, CSV. It matches on set name, so a set it names differently may land as unknown.",
+   head:["Folder Name","Quantity","Trade Quantity","Card Name","Set Code","Set Name","Card Number","Condition","Printing","Language","Price Bought","Date Bought"],
+   row:r=>["Binder",r.qty,0,r.name,r.SET,r.setName,r.num,CONDS.dragonshield[r.cond]||"NearMint",r.foil?"Foil":"Normal","English","0",today()]},
+  {id:"tcgplayer",name:"TCGplayer app",kind:"csv",how:"TCGplayer app: Collection, Import. The same file works as a buylist or mass-entry upload.",
+   head:["Quantity","Name","Simple Name","Set","Card Number","Set Code","Printing","Condition","Language","Rarity","Product ID","SKU"],
+   row:r=>[r.qty,r.name,r.front,r.setName,r.num,r.SET,r.foil?"Foil":"Normal",CONDS.tcgplayer[r.cond]||"Near Mint","English",cap(r.rarity),"",""]},
+  {id:"delver",name:"Delver Lens",kind:"csv",how:"Delver Lens: Import, CSV. Delver reads the Deckbox layout; if it asks, map Name, Edition Code, Card Number and Foil.",
+   head:["Count","Tradelist Count","Name","Edition","Edition Code","Card Number","Condition","Language","Foil","Scryfall ID"],
+   row:r=>[r.qty,"",r.name,r.setName,r.SET,r.num,CONDS.deckbox[r.cond]||"Near Mint","English",r.foil?"foil":"",r.sid]},
+  {id:"topdecked",name:"TopDecked",kind:"csv",how:"TopDecked: Collection, Import, CSV.",
+   head:["QUANTITY","NAME","SETCODE","SETNAME","COLLECTOR NUMBER","FINISH","PRICE","RARITY","ID","ACQUIRED DATE","ACQUIRED PRICE","LANG","PRICE SALE","SIGNING","ALTERATION","CONDITION","NOTES","TAGS"],
+   row:r=>[r.qty,r.name,r.set,r.setName,r.num,r.foil?"foil":"nonfoil","",r.rarity,r.sid,"","","en","","","",CONDS.topdecked[r.cond]||"near mint","",""]},
+  {id:"mtggoldfish",name:"MTGGoldfish",kind:"csv",how:"mtggoldfish.com: Collection, Import.",
+   head:["Card","Set ID","Set Name","Quantity","Foil","Variation","Collector Number","Scryfall ID"],
+   row:r=>[r.front,r.SET,r.setName,r.qty,r.foil?"foil":"regular","",r.num,r.sid]},
+  {id:"helvault",name:"Helvault",kind:"csv",how:"Helvault: Collection, Import, CSV.",
+   head:["collector_number","extras","language","name","oracle_id","quantity","scryfall_id","set_code","set_name"],
+   row:r=>[r.num,r.foil?"foil":"","en",r.name,"",r.qty,r.sid,r.set,r.setName]},
+  {id:"cardkingdom",name:"Card Kingdom buylist",kind:"csv",how:"cardkingdom.com: Sell, upload. Card Kingdom has no collector-number column, so variants of the same card in one set collapse together.",
+   head:["title","edition","foil","quantity"],
+   row:r=>[r.front,r.setName,r.foil?"TRUE":"FALSE",r.qty]},
+  {id:"binder",name:"Binder CSV",kind:"csv",how:"A compact file with Scryfall ids; Moxfield, Archidekt, MythicHub and Deckbox read it too.",
+   head:["Count","Name","Edition","Collector Number","Foil","Condition","Scryfall ID"],
+   row:r=>[r.qty,r.name,r.SET,r.num,r.foil?"foil":"",r.cond,r.sid]},
+  {id:"list",name:"Text list",kind:"txt",how:"One line per printing, the form Moxfield, Archidekt and Arena read: 1 Lightning Bolt (CLB) 187 *F*."}
+];
+function exportFor(id){const f=EXPORTS.find(x=>x.id===id)||EXPORTS[0];if(f.kind==="txt")return exportList();
+  return [f.head,...exportRows().map(f.row)].map(row=>row.map(csvQuote).join(",")).join("\r\n");}
+function exportName(id){const f=EXPORTS.find(x=>x.id===id)||EXPORTS[0];return `binder-${f.id}-${today()}.${f.kind}`;}
+async function shareExport(id){const f=EXPORTS.find(x=>x.id===id)||EXPORTS[0];const text=exportFor(id);
+  try{const file=new File([text],exportName(id),{type:f.kind==="csv"?"text/csv":"text/plain"});
+    if(navigator.canShare&&navigator.canShare({files:[file]})){await navigator.share({files:[file],title:"Binder collection for "+f.name});return true;}}catch(e){if(e&&e.name==="AbortError")return true;}
+  return false;}
+function openExportSheet(){
+  let cur=(S.prefs&&S.prefs.exportTo)||"manabox";
+  const draw=()=>{const f=EXPORTS.find(x=>x.id===cur)||EXPORTS[0];const n=exportRows().reduce((a,r)=>a+r.qty,0);const canShare=!!(navigator.canShare&&window.File);
+    $("#sheet").innerHTML=`<div class="grab"></div><div style="font-weight:700;font-size:17px">Export to another app</div>
+    <div class="note" style="margin-top:2px">${n} card${n===1?"":"s"}, one row per printing, finish and condition, in the layout the app's own export uses.</div>
+    <div class="chips" style="margin-top:10px">${EXPORTS.map(x=>`<button class="chip ${x.id===cur?"on":""}" data-exp="${x.id}" aria-pressed="${x.id===cur}">${x.name}</button>`).join("")}</div>
+    <div class="note" style="margin-top:10px">${esc(f.how)}</div>
+    <div class="stick"><div class="btnrow" style="margin-top:0">${canShare?'<button class="btn pri" id="expshare">Share file</button>':""}<button class="btn ${canShare?"":"pri"}" id="expdl">Download</button><button class="btn ghost" id="expcopy">Copy</button></div></div>`;
+    $("#sheet").querySelectorAll("[data-exp]").forEach(b=>b.onclick=()=>{cur=b.dataset.exp;S.prefs.exportTo=cur;save();draw();});
+    $("#expdl").onclick=()=>downloadText(exportName(cur),exportFor(cur),f.kind==="csv"?"text/csv":"text/plain");
+    $("#expcopy").onclick=()=>copyText(exportFor(cur),f.name+" export copied");
+    const sh=$("#expshare");if(sh)sh.onclick=async()=>{if(!(await shareExport(cur)))downloadText(exportName(cur),exportFor(cur),f.kind==="csv"?"text/csv":"text/plain");};
+  };
+  draw();openSheet();
+}
 function exportCSV(){
   const rows=[["Count","Name","Edition","Collector Number","Foil","Condition","Scryfall ID"]];
   for(const e of Object.values(S.col)){const card=BY_ID[e.id];const p=card.prints.find(x=>x.set===e.set&&x.num===e.num)||{};
@@ -1143,7 +1227,7 @@ function exportCSV(){
   return rows.map(r=>r.map(csvQuote).join(",")).join("\n");
 }
 function exportList(){
-  const lines=[];for(const e of Object.values(S.col)){const card=BY_ID[e.id];const nf=e.copies.filter(c=>!c.foil).length,f=e.copies.length-nf;
+  const lines=[];for(const e of Object.values(S.col)){const card=BY_ID[e.id];if(!card)continue;const nf=e.copies.filter(c=>!c.foil).length,f=e.copies.length-nf;
     if(nf)lines.push(`${nf} ${card.name} (${e.set.toUpperCase()}) ${e.num}`);if(f)lines.push(`${f} ${card.name} (${e.set.toUpperCase()}) ${e.num} *F*`);}
   return lines.join("\n");
 }
@@ -1163,13 +1247,13 @@ function parseCSV(text){
   return rows.filter(r=>r.some(c=>c.trim()!==""));
 }
 const COLS={
-  name:["name","card name","card","product name","cardname"],
+  name:["name","card name","card","product name","cardname","title","simple name"],
   set:["set code","set","edition code","edition","setcode","set_code","expansion code"],
-  setname:["set name","expansion","edition name","setname"],
+  setname:["set name","expansion","edition name","setname","set_name"],
   num:["collector number","collector's number","collectors number","number","card number","collectornumber","collector_number","cn"],
-  foil:["foil","finish","printing","foil/etched","is_foil","variant"],
-  qty:["quantity","qty","count","quantityx","total quantity","amount","q"],
-  id:["scryfall id","scryfall_id","scryfallid","id","scryfall"],
+  foil:["foil","finish","printing","foil/etched","is_foil","variant","extras","premium"],
+  qty:["quantity","qty","count","quantityx","total quantity","amount","q","groupcount"],
+  id:["scryfall id","scryfall_id","scryfallid","id","scryfall","scryfall uuid"],
   cond:["condition","cond"]
 };
 function colIndex(header,key){const h=header.map(x=>x.trim().toLowerCase());for(const n of COLS[key]){const i=h.indexOf(n);if(i>-1)return i;}return -1;}
@@ -1184,7 +1268,7 @@ function resolveLine(l){
   if(l.id){const hit=findBySid(l.id);if(hit)return {card:hit.card,print:hit.print,how:"id"};}
   const nm=String(l.name||"").replace(/\s*\/\/.*$/,"").trim().toLowerCase();if(!nm)return null;
   const card=BY_LOWER[nm]||INDEX.find(x=>x.lower.startsWith(nm+" //"));if(!card)return null;
-  let set=(l.set||"").trim().toLowerCase();if(!set&&l.setname)set=setCodeFromName(l.setname)||"";
+  let set=(l.set||"").trim().toLowerCase();if(set&&!SETS[set])set=setCodeFromName(l.set)||set;if(!set&&l.setname)set=setCodeFromName(l.setname)||"";
   const num=String(l.num||"").trim().replace(/^0+(?=\d)/,"");
   if(set&&num){const p=card.prints.find(x=>x.set===set&&String(x.num).replace(/^0+(?=\d)/,"")===num);if(p)return {card,print:p,how:"set+number"};}
   if(set){const ps=card.prints.filter(x=>x.set===set).sort((a,b)=>parseInt(a.num,10)-parseInt(b.num,10));if(ps.length)return {card,print:ps[0],how:"set"};}
@@ -1267,18 +1351,15 @@ function rMore(){
   <label class="btn"><input type="file" id="impfile" accept=".csv,.txt,text/csv,text/plain">Import a CSV or decklist file</label>
   <div class="note">ManaBox, Delver Lens, TCGplayer, Dragon Shield, Moxfield and Archidekt exports all work: Binder reads name, set code, collector number, foil, quantity and Scryfall id from whichever columns are there, and shows what matched before adding anything.</div>
   <div class="h">Export</div>
-  <div class="btnrow" style="margin-top:0"><button class="btn" id="csvdl">Download CSV</button><button class="btn" id="csv">Copy CSV</button></div>
-  <button class="btn" id="moxtxt" style="margin-top:8px">Copy as Moxfield list</button>
-  <div class="note">CSV has one row per printing and finish with the Scryfall id, so Moxfield, Archidekt, MythicHub and Deckbox import it directly. The list form is <span class="mono">1 Lightning Bolt (CLB) 187 *F*</span>.</div>
+  <button class="btn pri" id="expopen" style="margin-top:0">Export to another app</button>
+  <div class="note">ManaBox, Moxfield, Archidekt, Deckbox, Dragon Shield, TCGplayer, Delver Lens, TopDecked, MTGGoldfish, Helvault and Card Kingdom, each in the layout its own importer expects, plus a plain CSV with Scryfall ids and a text list. Import your list here, scan what's new, export it back.</div>
   <div class="h">Backup</div>
   <div class="btnrow" style="margin-top:0"><button class="btn" id="bkdl">Download backup</button><label class="btn"><input type="file" id="bkfile" accept=".json,application/json">Restore backup</label></div>
   <div class="note">A JSON file with the collection, decks, review queue and settings. Restoring replaces what's here.</div>
   <div class="h">Data</div>
   <div class="note" style="margin-top:0">The collection lives in this browser's local storage. The card index (magic-search-engine build of 2026-10-17, every printing through the latest sets) and the OCR engine (Tesseract.js 5, English LSTM model) are cached by the service worker after first use, so the whole app works offline; card art is the one thing fetched on demand. Add it to your home screen for a full-screen install.</div>
   <div class="btnrow" style="margin-top:10px"><button class="btn" id="demo">Load demo collection</button><button class="btn" id="reset">Clear everything</button></div>`;
-  $("#csv").onclick=()=>copyText(exportCSV(),"CSV copied");
-  $("#csvdl").onclick=()=>downloadText("binder-collection-"+today()+".csv",exportCSV(),"text/csv");
-  $("#moxtxt").onclick=()=>copyText(exportList(),"List copied");
+  $("#expopen").onclick=openExportSheet;
   $("#bkdl").onclick=()=>downloadText("binder-backup-"+today()+".json",JSON.stringify({app:"binder",version:APP_VERSION,at:new Date().toISOString(),state:S},null,1),"application/json");
   $("#bkfile").onchange=e=>{const f=e.target.files[0];if(f)restoreBackup(f);e.target.value="";};
   $("#impfile").onchange=e=>{const f=e.target.files[0];if(f)importFile(f);e.target.value="";};
@@ -1463,7 +1544,7 @@ function syncStatusLine(){const g=S.prefs.gdrive||{};if(sync.busy)return "Syncin
 })();
 /* After a deploy the old cached app runs once while the new service worker installs.
    When the new one takes over, reload once so the new build is what you see. */
-const APP_VERSION="20261018o";
+const APP_VERSION="20261018p";
 let swReg=null;
 function setupUpdates(){
   if(!("serviceWorker" in navigator))return;
